@@ -599,7 +599,7 @@ warning: spurious network error (1 tries remaining): [6] Couldn't resolve host n
 ###### 五、使用cbindgen工具生成静态库C语言头文件
 在完成静态链接库的编译后，新建```cbindgen.toml```文件，添加```language = "C"```，然后执行命令：
 ```
-cbindgen --config cbindgen.toml --crate (库文件名称) --output (目标头文件名称)
+cbindgen --config cbindgen.toml --crate (库文件名称=Linklist) --output (目标头文件名称=rust_linklist.h)
 ```
 执行成功后，目录将变化为：
 ```
