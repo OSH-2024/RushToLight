@@ -14,9 +14,9 @@
 
 - 3. [liteOS-m内核分析](#liteOS-m内核分析)
    - 3.1. [重要的数据结构](#重要的数据结构)
-     - 3.1.1. [双向链表 ```LOS_DL_LIST```](#双向链表 ```LOS_DL_LIST```)
-     - 3.1.2. [任务就绪队列 ```g_priQueueList```](#任务就绪队列 ```g_priQueueList```)
-     - 3.1.3. [任务排序链表 ```g_taskSortLinkList```](#任务排序链表 ```g_taskSortLinkList```)
+     - 3.1.1. [双向链表```LOS_DL_LIST```](#双向链表```LOS_DL_LIST```)
+     - 3.1.2. [任务就绪队列```g_priQueueList```](#任务就绪队列```g_priQueueList```)
+     - 3.1.3. [任务排序链表```g_taskSortLinkList```](#任务排序链表```g_taskSortLinkList```)
    - 3.2. [任务处理](#任务处理)
      - 3.2.1. [任务控制块```LosTaskCB```](#任务控制块```LosTaskCB```)
      - 3.2.2. [任务模块初始化](#任务模块初始化)
@@ -235,7 +235,7 @@ los_memory.c是LiteOS的动态内存管理模块,建0议用Rust的alloc模块替
 los_task.c是LiteOS的任务管理模块,建议用Rust重写任务的创建、销毁、调度等核心功能,提高其安全性和可靠性。Rust有丰富的并发编程特性,如线程、协程等,可以用来实现任务管理。但是,LiteOS的任务管理与硬件体系结构和汇编代码紧密相关,完全用Rust重写可能会比较困难。使用Rust重写los_task.c的核心功能后,可以提高任务管理的安全性和可靠性,减少潜在的内存错误和并发问题。但是,由于任务管理与硬件和汇编代码紧密相关,完全重写的难度较大,可能需要分步实施。
 ## liteOS-m内核分析
 ### 重要的数据结构 
-#### 双向链表 ```LOS_DL_LIST```
+#### 双向链表```LOS_DL_LIST```
 双向链表```LOS_DL_LIST```定义在list.c中,是含有两个指向双向链表数据类型指针(*LOS_DL_LIST)的结构体
 在list.c文件中,还定义了一些对双向链表的配套操作，包括
 ```LOS_ListInit(LOS_DL_LIST *list)```对链表进行初始化(首尾相连)
@@ -244,13 +244,13 @@ los_task.c是LiteOS的任务管理模块,建议用Rust重写任务的创建、�
 ```LOS_ListDelete(LOS_DL_LIST *node)```对链表节点进行删除
 等等...
 **双向链表是组成其他结构体和数据结构的基本单元**
-#### 任务就绪队列 ```g_priQueueList```
+#### 任务就绪队列```g_priQueueList```
 
 1. 任务就绪队列是一个元素为**双向链表结构体(LOS_DL_LIST)** 的数组, g_losPriorityQueueList是指向该数组的指针,数组的每个元素都可以看做是一个LosTaskCB类型双向链表的头节点,数组元素个数为任务的优先级数量,在liteOS中,总共有32个优先级(记为0~31),数值越小优先级越大
 
 2. g_priQueueBitmap是一个unsigned int类型数据,其上的32bit分别记录着32个双向链表队列各自上面是否有等待的任务,1表示有就绪任务,0表示无就绪任务,最高位存放着优先级为0的任务队列
 ![pic](../src/任务就绪队列.png)
-#### 任务排序链表 ```g_taskSortLinkList```
+#### 任务排序链表```g_taskSortLinkList```
 1. 任务排序链表是用于处理**任务延迟到期/超时唤醒**的数据结构,也就是将某个需要延期执行的任务放置到特定位置上(位置与延迟时间相关),之后唤醒。
 
 2. ```TaskSortLinkAttr```是用来表示任务排序链表的结构体，其内定义了双向链表指针类型(```LOS_DL_LIST *```)的变量sortLink是用于指向一个**双向链表数组**的指针，数组的每个元素(双向链表)作为头结点,具有一个位置索引```sortindex```(0~31),挂载着数个任务块(```LosTaskCB```),每个任务里面含有一个滚轮数(idxRollNum),每次轮到自身执行后rollnum自减,直到为0后从链表移除。
