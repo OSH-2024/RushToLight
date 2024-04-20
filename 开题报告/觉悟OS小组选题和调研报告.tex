@@ -382,7 +382,7 @@ Google通过提供Rust工具链和SDK支持，以及在Fuchsia中集成Rust运�
 总的来说，ARM 通过在 Pelion OS 中采用 Rust 语言，展现了对安全性和可靠性的承诺，同时也推动了 Rust 在系统级编程领域的应用和发展。
 \end{enumerate}
 \section{目标与预期成果}
-我们小组计划对LiteOS的任务调度、队列管理与内存管理模块进行改写，大致计划为：
+我们小组计划对LiteOS的任务调度(los_task.c)、队列管理(los_queue.c)与内存管理模块(los_memory.c)进行改写，大致计划为：
 \begin{enumerate}
 \item 1-2周学习Rust相关语法知识，并且对LiteOS待改写模块代码进行分析(如函数的功能，相互的引用关系等)；
 \item 5-6周使用Rust改写模块，并对模块进行功能性测试，准备中期汇报；
