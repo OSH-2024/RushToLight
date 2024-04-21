@@ -1,17 +1,19 @@
-# RushToLight：Rust改写华为liteOS
+# RushToLight：Rust改写Harmony LiteOS
 ![alt_text](./src/our_logo.jpg)
 
-项目介绍：Rust是一款安全高性能语言，我们小组打算用rust改写嵌入式操作系统华为liteOS以提高嵌入式设备安全性。
+项目介绍：OpenHarmony LiteOS-M内核是面向IoT领域构建的轻量级嵌入式物联网操作系统内核。我们打算用RUST改写LiteOS-M以提高其安全性。
 
 **小组名称**：觉悟OS (RushToLight)
 
 **小组成员**：姬子琢 区家彬 吴宇翀 舒佳豪
 
-**关键词**：Rust，嵌入式操作系统，liteOS，华为，~~遥遥领先~~
+**指导老师**：邢凯
 
-**其他语言版本: [中文](README.md), [English](README_english.md).**
+**关键词**：Rust，嵌入式操作系统，liteOS，鸿蒙，~~遥遥领先~~
 
-**OpenHarmony LiteOS-M源码**[https://gitee.com/openharmony/kernel_liteos_m](https://gitee.com/openharmony/kernel_liteos_m)
+**语言版本: [中文](README.md), [English](README_english.md).**
+
+**OpenHarmony LiteOS-M源码：**[https://gitee.com/openharmony/kernel_liteos_m](https://gitee.com/openharmony/kernel_liteos_m)
 ## 项目进展
 
 | 项目阶段 | 时间 | 项目进展 | 工作安排 |
