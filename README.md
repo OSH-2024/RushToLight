@@ -11,6 +11,7 @@
 
 **其他语言版本: [中文](README.md), [English](README_english.md).**
 
+**OpenHarmony LiteOS-M源码**[https://gitee.com/openharmony/kernel_liteos_m](https://gitee.com/openharmony/kernel_liteos_m)
 ## 项目进展
 
 | 项目阶段 | 时间 | 项目进展 | 工作安排 |
