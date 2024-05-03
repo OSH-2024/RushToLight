@@ -275,3 +275,82 @@ fn os_mem_middle_addr(start_addr: *const OsMemPoolHead, middle_addr: *const VOID
     // 判断中间地址是否在开始和结束地址之间（包含结束地址）
     (start_addr <= middle_addr) && (middle_addr <= end_addr)
 }
+
+#[cfg(LOSCFG_BASE_MEM_NODE_INTEGRITY_CHECK)]
+fn os_mem_set_magic(node: &mut OsMemNodeHead) {
+    node.magic = OS_MEM_NODE_MAGIC;
+}
+
+// 如果启用了内存节点完整性检查，则定义相应的函数
+#[cfg(LOSCFG_BASE_MEM_NODE_INTEGRITY_CHECK)]
+fn os_mem_magic_valid(node: &OsMemNodeHead) -> bool {
+    node.magic == OS_MEM_NODE_MAGIC
+}
+
+// 如果未启用内存节点完整性检查，则定义相应的函数
+#[cfg(not(LOSCFG_BASE_MEM_NODE_INTEGRITY_CHECK))]
+fn os_mem_set_magic(_node: &mut OsMemNodeHead) {
+    // 当内存节点完整性检查被禁用时不执行任何操作
+}
+
+// 如果未启用内存节点完整性检查，则定义相应的函数
+#[cfg(not(LOSCFG_BASE_MEM_NODE_INTEGRITY_CHECK))]
+fn os_mem_magic_valid(_node: &OsMemNode) -> bool {
+    true // 当内存节点完整性检查被禁用时始终返回 true
+}
+
+// 如果启用了内存节点完整性检查，则声明相应的函数
+#[cfg(LOSCFG_BASE_MEM_NODE_INTEGRITY_CHECK)]
+fn os_mem_alloc_check(pool: &mut OsMemPoolHead, int_save: u32) -> u32;
+
+
+
+// 如果支持多内存区域配置，则定义与间隙节点相关的宏
+#[cfg(LOSCFG_MEM_MUL_REGIONS)]
+const OS_MEM_GAP_NODE_MAGIC: usize = 0xDCBAABCD;
+
+#[cfg(LOSCFG_MEM_MUL_REGIONS)]
+fn os_mem_mark_gap_node(node: &mut OsMemNodeHead) {
+    node.ptr.prev = OS_MEM_GAP_NODE_MAGIC as *mut OsMemNodeHead;
+}
+
+#[cfg(LOSCFG_MEM_MUL_REGIONS)]
+fn os_mem_is_gap_node(node: &OsMemNodeHead) -> bool {
+    node.ptr.prev == OS_MEM_GAP_NODE_MAGIC as *const OsMemNodeHead
+}
+
+#[cfg(not(LOSCFG_MEM_MUL_REGIONS))]
+fn os_mem_mark_gap_node(_node: &mut OsMemNodeHead) {
+    // 当不支持多内存区域配置时，标记间隙节点的函数为空操作
+}
+
+#[cfg(not(LOSCFG_MEM_MUL_REGIONS))]
+fn os_mem_is_gap_node(_node: &OsMemNodeHead) -> bool {
+    false // 当不支持多内存区域配置时，间隙节点判断函数始终返回 false
+}
+
+// 添加空闲内存节点到内存的内联函数
+fn os_mem_free_node_add(pool: *mut c_void, node: *mut OsMemFreeNodeHead) {
+    unsafe {
+        (*pool).add_free(node);
+    }
+}
+
+// 从内存池释放内存节点的内联函数
+fn os_mem_free(pool: *mut OsMemPoolHead, node: *mut OsMemNodeHead) -> u32 {
+    unsafe {
+        (*pool).free(node)
+    }
+}
+
+// 打印内存池信息的函数
+fn os_mem_info_print(pool: *mut c_void) {
+    unsafe {
+        (*pool).print_info();
+    }
+}
+
+#[cfg(any(LOSCFG_MEM_FREE_BY_TASKID, LOSCFG_TASK_MEM_USED))]
+fn os_mem_node_set_task_id(node: &mut OsMemUsedNodeHead) {
+    node.header.task_id = LOS_CurTaskIDGet();
+}
