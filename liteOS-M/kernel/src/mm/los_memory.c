@@ -468,6 +468,8 @@ STATIC INLINE struct OsMemNodeHead *PreSentinelNodeGet(const VOID *pool, const s
     return NULL;
 }
 // -----------------    到这里分给舒佳豪   ---------------------------  //
+
+// ------------------    第二次任务        ---------------------------  //
 STATIC INLINE BOOL TryShrinkPool(const VOID *pool, const struct OsMemNodeHead *node)
 {
     struct OsMemNodeHead *mySentinel = NULL;
@@ -651,7 +653,7 @@ STATIC INLINE VOID OsMemLinkRegisterRecord(struct OsMemNodeHead *node)
     (VOID)memset(node->linkReg, 0, sizeof(node->linkReg));
     OsBackTraceHookCall(node->linkReg, LOSCFG_MEM_RECORD_LR_CNT, LOSCFG_MEM_OMIT_LR_CNT, 0);
 }
-
+//    -----------------------    到这里分给舒佳豪      ---------------------------  //
 STATIC INLINE VOID OsMemUsedNodePrint(struct OsMemNodeHead *node)
 {
     UINT32 count;
@@ -832,7 +834,7 @@ STATIC INLINE VOID OsMemListDelete(struct OsMemPoolHead *pool, UINT32 listIndex,
     }
     OS_MEM_SET_MAGIC(&node->header);
 }
-
+//    -----------------------    到这里分给吴宇翀      ---------------------------  //
 STATIC INLINE VOID OsMemFreeNodeAdd(VOID *pool, struct OsMemFreeNodeHead *node)
 {
     UINT32 index = OsMemFreeListIndexGet(node->header.sizeAndFlag);
@@ -1003,7 +1005,7 @@ STATIC UINT32 OsMemPoolAdd(VOID *pool, UINT32 size)
     ((struct OsMemPoolHead *)pool)->nextPool = NULL;
     return LOS_OK;
 }
-
+//    -----------------------    到这里分给姬子琢      ---------------------------  //
 STATIC UINT32 OsMemPoolDelete(VOID *pool)
 {
     UINT32 ret = LOS_NOK;
@@ -1244,6 +1246,9 @@ VOID *LOS_MemAllocAlign(VOID *pool, UINT32 size, UINT32 boundary)
 
     return ptr;
 }
+
+
+
 
 STATIC INLINE BOOL OsMemAddrValidCheck(const struct OsMemPoolHead *pool, const VOID *addr)
 {
@@ -1594,7 +1599,8 @@ STATIC VOID MemNodeFreeByTaskIDHandle(struct OsMemNodeHead *curNode, VOID *arg)
     }
     return;
 }
-
+// ------------------------------   到这里分给区家彬  --------------------------------------
+// ------------------------------   第二次任务到此为止  --------------------------------------
 UINT32 LOS_MemFreeByTaskID(VOID *pool, UINT32 taskID)
 {
     UINT32 args[2] = { taskID, (UINT32)(UINTPTR)pool };
