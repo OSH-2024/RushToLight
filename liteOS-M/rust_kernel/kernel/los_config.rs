@@ -1,4 +1,5 @@
 pub const LOSCFG_SYS_HEAP_SIZE: u32 = 65536;
+pub type VOID = ::std::os::raw::c_void;
 pub type UINT8 = ::std::os::raw::c_uchar;
 pub type UINT16 = ::std::os::raw::c_ushort;
 pub type UINT32 = ::std::os::raw::c_uint;
