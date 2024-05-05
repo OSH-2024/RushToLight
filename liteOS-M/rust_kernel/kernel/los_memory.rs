@@ -330,25 +330,13 @@ fn os_mem_is_gap_node(_node: &OsMemNodeHead) -> bool {
 }
 
 // 添加空闲内存节点到内存的内联函数
-fn os_mem_free_node_add(pool: *mut c_void, node: *mut OsMemFreeNodeHead) {
-    unsafe {
-        (*pool).add_free(node);
-    }
-}
+fn os_mem_free_node_add(pool: &mut c_void, node: &mut OsMemFreeNodeHead)
 
 // 从内存池释放内存节点的内联函数
-fn os_mem_free(pool: *mut OsMemPoolHead, node: *mut OsMemNodeHead) -> u32 {
-    unsafe {
-        (*pool).free(node)
-    }
-}
+fn os_mem_free(pool: &mut OsMemPoolHead, node: &mut OsMemNodeHead) -> u32 ;
 
 // 打印内存池信息的函数
-fn os_mem_info_print(pool: *mut c_void) {
-    unsafe {
-        (*pool).print_info();
-    }
-}
+fn os_mem_info_print(pool: &mut c_void);
 
 #[cfg(any(LOSCFG_MEM_FREE_BY_TASKID, LOSCFG_TASK_MEM_USED))]
 fn os_mem_node_set_task_id(node: &mut OsMemUsedNodeHead) {
