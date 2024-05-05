@@ -80,10 +80,9 @@ pub struct OsMemFreeNodeHead {
     pub next: *mut OsMemFreeNodeHead,
 }
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
 pub struct OsMemPoolHead {
     pub info: OsMemPoolInfo,
     pub freeListBitmap: [UINT32; 7usize],
     pub freeList: [*mut OsMemFreeNodeHead; 223usize],
+    pub nextPool: *mut VOID,
 }
