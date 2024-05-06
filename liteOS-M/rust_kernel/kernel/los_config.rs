@@ -1,4 +1,10 @@
 pub const LOSCFG_SYS_HEAP_SIZE: u32 = 65536;
+pub const LOSCFG_MEM_FREE_BY_TASKID: u32 = 0;
+pub const LOS_OK: u32 = 0;
+pub const OS_FAIL: u32 = 1;
+pub const OS_64BIT_MAX: i32 = -1;
+pub const LOSCFG_MEM_MUL_POOL: u32 = 1;
+pub const LOSCFG_BASE_CORE_TSK_LIMIT: u32 = 5;
 pub type VOID = ::std::os::raw::c_void;
 pub type UINT8 = ::std::os::raw::c_uchar;
 pub type UINT16 = ::std::os::raw::c_ushort;
