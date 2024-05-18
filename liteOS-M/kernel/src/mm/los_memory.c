@@ -1601,6 +1601,8 @@ STATIC VOID MemNodeFreeByTaskIDHandle(struct OsMemNodeHead *curNode, VOID *arg)
 }
 // ------------------------------   到这里分给区家彬  --------------------------------------
 // ------------------------------   第二次任务到此为止  --------------------------------------
+
+// ------------------------------   第三次任务开始  --------------------------------------
 UINT32 LOS_MemFreeByTaskID(VOID *pool, UINT32 taskID)
 {
     UINT32 args[2] = { taskID, (UINT32)(UINTPTR)pool };
@@ -1781,7 +1783,7 @@ STATIC VOID OsMemPoolHeadCheck(const struct OsMemPoolHead *pool)
 #endif
     }
 }
-
+//----------------------------      姬子琢     ---------------------------------------
 STATIC UINT32 OsMemIntegrityCheck(const struct OsMemPoolHead *pool, struct OsMemNodeHead **tmpNode,
                 struct OsMemNodeHead **preNode)
 {
@@ -1946,7 +1948,7 @@ STATIC INLINE UINT32 OsMemAllocCheck(struct OsMemPoolHead *pool, UINT32 intSave)
     return LOS_OK;
 }
 #endif
-
+//----------------------------     区家彬       ---------------------------------------
 UINT32 LOS_MemIntegrityCheck(const VOID *pool)
 {
     if (pool == NULL) {
@@ -2178,7 +2180,7 @@ STATIC INLINE UINT32 OsMemMulRegionsParamCheck(VOID *pool, const LosMemRegion * 
     }
     return LOS_OK;
 }
-
+//----------------------------    舒佳豪      ---------------------------------------
 STATIC INLINE VOID OsMemMulRegionsLink(struct OsMemPoolHead *poolHead, VOID *lastStartAddress, UINT32 lastLength,
                                        struct OsMemNodeHead *lastEndNode, const LosMemRegion *memRegion)
 {
@@ -2372,3 +2374,5 @@ UINT32 OsMemExcInfoGet(UINT32 memNumMax, MemInfoCB *memExcInfo)
     return count;
 }
 #endif
+//----------------------------     吴宇翀        ---------------------------------------
+//----------------------------第三次任务分配结束    ---------------------------------------

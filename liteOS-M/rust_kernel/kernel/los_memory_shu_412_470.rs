@@ -145,16 +145,16 @@ STATIC INLINE struct OsMemNodeHead *PreSentinelNodeGet(const VOID *pool, const s
 }
 */
 //待检查
-fn pre_sentinel_node_get(pool: *const u8, node: *const OsMemNodeHead) -> *mut OsMemNodeHead {
-    let mut next_size: u32;
-    let mut next_node: *mut OsMemNodeHead = null_mut();
-    let mut sentinel_node: *mut OsMemNodeHead = null_mut();
+fn pre_sentinel_node_get(pool: *const u8, node: *const OsMemNodeHead) -> *mut OsMemNodeHead {//
+    let mut next_size: u32;//
+    let mut next_node: *mut OsMemNodeHead = null_mut();//
+    let mut sentinel_node: *mut OsMemNodeHead = null_mut();//
 
-    sentinel_node = os_mem_end_node(pool, unsafe { (*pool as *const OsMemPoolHead).info.total_size });
-    while !sentinel_node.is_null() {
-        if os_mem_is_last_sentinel_node(sentinel_node) {
-            println!("PreSentinelNodeGet can not find node 0x{:x}", node as usize);
-            return null_mut();
+    sentinel_node = os_mem_end_node(pool, unsafe { (*pool as *const OsMemPoolHead).info.total_size });//
+    while !sentinel_node.is_null() {//
+        if os_mem_is_last_sentinel_node(sentinel_node) {//
+            println!("PreSentinelNodeGet can not find node 0x{:x}", node as usize);//
+            return null_mut();//
         }
         next_node = os_mem_sentinel_node_get(unsafe { &*sentinel_node });
         if next_node == node as *mut OsMemNodeHead {
