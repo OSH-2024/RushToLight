@@ -815,7 +815,7 @@ STATIC INLINE VOID OsMemListAdd(struct OsMemPoolHead *pool, UINT32 listIndex, st
     OS_MEM_SET_MAGIC(&node->header);
 }
 
-STATIC INLINE VOID OsMemListDelete(struct OsMemPoolHead *pool, UINT32 listIndex, struct OsMemFreeNodeHead *node)
+STATIC INLINE VOID (struct OsMemPoolHead *pool, UINT32 listIndex, struct OsMemFreeNodeHead *node)
 {
     if (node == pool->freeList[listIndex]) {
         pool->freeList[listIndex] = node->next;

@@ -163,7 +163,7 @@ pub fn OsMemPoolDeInit(pool:&mut VOID,size:UINT32){
 
 //向内存池链表中添加新的内存池
 #[inline]
-pub unsafe fn OsMemPoolAdd -> UINT32(pool:*mut VOID,size:UINT32){//pool为指针而不是引用
+pub unsafe fn OsMemPoolAdd -> UINT32(pool:*mut VOID,size:UINT32){
     let mut nextPool:*mut VOID=G_POOL_HEAD;
     let mut curPool:*mut VOID=G_POOL_HEAD;
     let mut poolEnd:UINTPTR;
@@ -174,7 +174,7 @@ pub unsafe fn OsMemPoolAdd -> UINT32(pool:*mut VOID,size:UINT32){//pool为指针
         (((pool as UINTPTR) < poolEnd) && (((pool as UINTPTR) + size) >= poolEnd))
         {
             //检索不到PRINT_ERR
-            PRINT_ERR("pool [0x%x, 0x%x) conflict with pool [0x%x, 0x%x)\n", pool as UINTPTR,
+            println!("pool [0x%x, 0x%x) conflict with pool [0x%x, 0x%x)\n", pool as UINTPTR,
                       (pool as UINTPTR) + size, (nextPool as UINTPTR), (nextPool as UINTPTR) + LOS_MemPoolSizeGet(&nextPool));
             return LOS_NOK;
         }
