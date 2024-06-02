@@ -80,9 +80,27 @@ pub struct OsMemFreeNodeHead {
     pub next: *mut OsMemFreeNodeHead,
 }
 
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct OsMemPoolHead {
     pub info: OsMemPoolInfo,
     pub freeListBitmap: [UINT32; 7usize],
     pub freeList: [*mut OsMemFreeNodeHead; 223usize],
     pub nextPool: *mut VOID,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct LOS_MEM_POOL_STATUS {
+    total_used_size: u32,
+    total_free_size: u32,
+    max_free_node_size: u32,
+    used_node_num: u32,
+    free_node_num: u32,
+}
+
+#[cfg(LOSCFG_MEM_MUL_REGIONS == 1)]
+struct LosMemRegion {
+    start_address: *mut std::ffi::c_void,
+    length: u32,
 }
