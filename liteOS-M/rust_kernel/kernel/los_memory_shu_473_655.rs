@@ -1,3 +1,5 @@
+//上面是c函数，下面是rust函数，作者舒佳豪
+/* 
 STATIC INLINE BOOL TryShrinkPool(const VOID *pool, const struct OsMemNodeHead *node)
 {
     struct OsMemNodeHead *mySentinel = NULL;
@@ -29,8 +31,43 @@ STATIC INLINE BOOL TryShrinkPool(const VOID *pool, const struct OsMemNodeHead *n
     }
 
     return TRUE;
-}
+} 
+*/
+fn try_shrink_pool(pool: *const u8, node: *const OsMemNodeHead) -> bool {
+    let total_size = (node.ptr.prev as usize) - (node as usize);
+    let node_size = os_mem_node_get_size(node.size_and_flag);
 
+    if node_size != total_size {
+        return false;
+    }
+
+    let pre_sentinel = pre_sentinel_node_get(pool, node);
+    if pre_sentinel.is_null() {
+        return false;
+    }
+
+    let my_sentinel = node.ptr.prev;
+    if os_mem_is_last_sentinel_node(my_sentinel) {
+        // prev node becomes sentinel node
+        unsafe {
+            (*pre_sentinel).ptr.next = ptr::null_mut();
+            os_mem_sentinel_node_set(pre_sentinel, ptr::null_mut(), 0);
+        }
+    } else {
+        unsafe {
+            (*pre_sentinel).size_and_flag = (*my_sentinel).size_and_flag;
+            (*pre_sentinel).ptr.next = (*my_sentinel).ptr.next;
+        }
+    }
+
+    if os_mem_large_node_free(node as *mut OsMemNodeHead) != LOS_OK {
+        println!("TryShrinkPool free {:?} failed!", node);
+        return false;
+    }
+
+    true
+}
+/*
 STATIC INLINE INT32 OsMemPoolExpand(VOID *pool, UINT32 size, UINT32 intSave)
 {
     UINT32 tryCount = MAX_SHRINK_PAGECACHE_TRY;
@@ -69,7 +106,50 @@ RETRY:
 
     return 0;
 }
+*/
+fn os_mem_pool_expand(pool: *mut OsMemPoolHead, size: usize) -> i32 {
+    let mut try_count = MAX_SHRINK_PAGECACHE_TRY;
+    let pool_info = unsafe { &mut (*pool) };
+    let mut new_node: *mut OsMemNodeHead = ptr::null_mut();
+    let end_node = os_mem_end_node(pool, pool_info.info.total_size);
 
+    let size = (size + os_mem_node_head_size()).round_up_to(PAGE_SIZE);
+
+    'retry: loop {
+        new_node = unsafe { los_phys_pages_alloc_contiguous(size / PAGE_SIZE) };
+        if !new_node.is_null() {
+            break;
+        }
+
+        if try_count > 0 {
+            try_count -= 1;
+            // MEM_UNLOCK(pool_info, int_save);
+            os_try_shrink_memory(size / PAGE_SIZE);
+            // MEM_LOCK(pool_info, int_save);
+            continue 'retry;
+        }
+
+        println!("OsMemPoolExpand alloc failed size = {}", size);
+        return -1;
+    }
+
+    unsafe {
+        (*new_node).size_and_flag = size - os_mem_node_head_size();
+        (*new_node).ptr.prev = os_mem_end_node(new_node, size);
+        os_mem_sentinel_node_set(end_node, new_node, size);
+        os_mem_free_node_add(pool, new_node);
+
+        let end_node = os_mem_end_node(new_node, size);
+        ptr::write_bytes(end_node, 0, 1);
+        (*end_node).ptr.next = ptr::null_mut();
+        // OS_MEM_SET_MAGIC(end_node);
+        os_mem_sentinel_node_set(end_node, ptr::null_mut(), 0);
+        os_mem_water_used_record(pool_info, os_mem_node_head_size());
+    }
+
+    0
+}
+//to be done
 VOID LOS_MemExpandEnable(VOID *pool)
 {
     if (pool == NULL) {
