@@ -148,8 +148,9 @@ fn os_mem_pool_expand(pool: *mut OsMemPoolHead, size: usize) -> i32 {
     }
 
     0
-}
+}  
 //to be done
+/* 
 VOID LOS_MemExpandEnable(VOID *pool)
 {
     if (pool == NULL) {
@@ -159,7 +160,17 @@ VOID LOS_MemExpandEnable(VOID *pool)
     ((struct OsMemPoolHead *)pool)->info.attr |= OS_MEM_POOL_EXPAND_ENABLE;
 }
 #endif
+*/
+fn los_mem_expand_enable(pool: *mut OsMemPoolHead) {
+    if pool.is_null() {
+        return;
+    }
 
+    unsafe {
+        (*pool).info.attr |= OS_MEM_POOL_EXPAND_ENABLE;
+    }
+}
+/* 
 #ifdef LOSCFG_KERNEL_LMS
 STATIC INLINE VOID OsLmsFirstNodeMark(VOID *pool, struct OsMemNodeHead *node)
 {
@@ -174,7 +185,28 @@ STATIC INLINE VOID OsLmsFirstNodeMark(VOID *pool, struct OsMemNodeHead *node)
     g_lms->simpleMark((UINTPTR)node + OS_MEM_NODE_HEAD_SIZE, (UINTPTR)OS_MEM_NEXT_NODE(node),
         LMS_SHADOW_AFTERFREE_U8);
 }
-
+*/
+//可能有问题
+#[cfg(feature = "LOSCFG_KERNEL_LMS")]
+fn os_lms_first_node_mark(pool: *mut OsMemPoolHead, node: *mut OsMemNodeHead) {
+    unsafe {
+        if let Some(lms) = G_LMS.as_mut() {
+            lms.simple_mark(pool as usize, node as usize, LMS_SHADOW_PAINT_U8);
+            lms.simple_mark(node as usize, node as usize + OS_MEM_NODE_HEAD_SIZE, LMS_SHADOW_REDZONE_U8);
+            lms.simple_mark(
+                os_mem_next_node(node) as usize,
+                os_mem_next_node(node) as usize + OS_MEM_NODE_HEAD_SIZE,
+                LMS_SHADOW_REDZONE_U8,
+            );
+            lms.simple_mark(
+                node as usize + OS_MEM_NODE_HEAD_SIZE,
+                os_mem_next_node(node) as usize,
+                LMS_SHADOW_AFTERFREE_U8,
+            );
+        }
+    }
+}
+//从这开始了
 STATIC INLINE VOID OsLmsAllocAlignMark(VOID *ptr, VOID *alignedPtr, UINT32 size)
 {
     struct OsMemNodeHead *allocNode = NULL;
