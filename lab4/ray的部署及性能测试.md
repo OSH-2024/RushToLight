@@ -249,3 +249,92 @@ for i in range(num_images):
 
 4. **任务调度和管理优化**：
 Ray 提供了高效的任务调度和管理机制，可以根据配置的资源情况进行智能调度。提升配置参数后，Ray 可以更好地管理和调度任务，确保任务能够按时完成并充分利用资源。这种优化对于大规模数据处理和并行计算特别重要，可以显著提升系统的整体性能。
+
+## 四、分布式ray集群部署
+
+1. 通过以下命令创建ray头结点
+```
+ray start --head --port=6379 --include-dashboard=true --dashboard-host=0.0.0.0 --dashboard-port=8265
+```
+2. 在其他主机中连接该头结点
+```
+ray start --address='172.31.77.207:6379'
+```
+3. 查看头结点状态，发现连接成功
+   
+![alt text](src/image.png)
+
+## 五：分布式ray性能测试
+1. 测试程序
+在单机测试中我们准备的CS程序较为复杂，为便于进行多机部署测试，我们准备了另一个程序————对图片的高斯模糊处理。
+源码如下：
+```py
+import os
+import time
+import ray
+import numpy as np
+from PIL import Image, ImageFilter
+from io import BytesIO
+
+# 初始化Ray
+ray.init()
+
+# 定义一个远程函数,用于对单个图像应用高斯模糊
+@ray.remote
+def apply_gaussian_blur(image_data, radius):
+    img = Image.open(BytesIO(image_data))
+    blurred_img = img.filter(ImageFilter.GaussianBlur(radius=radius))
+    return np.array(blurred_img)
+
+# 定义一个函数,用于对单个图像应用高斯模糊(不使用Ray)
+def apply_gaussian_blur_serial(image_path, radius):
+    with Image.open(image_path) as img:
+        blurred_img = img.filter(ImageFilter.GaussianBlur(radius=radius))
+        return np.array(blurred_img)
+
+# 定义一个函数,用于对一批图像应用高斯模糊
+def process_images(image_dir, radius):
+    image_files = [os.path.join(image_dir, f) for f in os.listdir(image_dir) if f.endswith(".jpg")]
+    
+    # 读取图像文件内容并使用ray.put()发送给工作进程
+    image_data = [ray.put(open(file, 'rb').read()) for file in image_files]
+    
+    # 使用Ray并行处理图像
+    start_time = time.time()
+    blurred_images = ray.get([apply_gaussian_blur.remote(data, radius) for data in image_data])
+    end_time = time.time()
+    
+    print(f"使用Ray处理{len(image_files)}张图像耗时: {end_time - start_time:.2f}秒")
+    
+    # 不使用Ray串行处理图像
+    start_time = time.time()
+    blurred_images_serial = [apply_gaussian_blur_serial(file, radius) for file in image_files]
+    end_time = time.time()
+    
+    print(f"不使用Ray处理{len(image_files)}张图像耗时: {end_time - start_time:.2f}秒")
+    
+    return blurred_images
+
+# 指定图像目录和高斯模糊半径
+image_dir = "/home/ubuntu/Desktop/image"
+radius = 5
+
+# 调用图像处理函数
+blurred_images = process_images(image_dir, radius)
+```
+
+### 本机测试性能
+1. 吞吐量(完成时间)：
+![alt text](src/image-1.png)
+1. 资源使用率（见各面板）：
+![alt text](src/image-2.png)
+![alt text](src/image-3.png)
+### 分布式部署测试性能
+1. 吞吐量(完成时间)：
+![alt text](src/image-5.png)
+1. 资源使用率（见各面板）：
+![alt text](src/image-6.png)
+![alt text](src/image-7.png)
+
+### 性能比较
+可以发现，分布式ray处理50张图片的速度平均为4.58秒，比单机部署ray(9.63秒)在吞吐量（处理时间）上行性能提高了110%，分布式部署ray通过利用多机资源大幅提高了性能。
