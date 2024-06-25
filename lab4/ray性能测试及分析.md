@@ -1,58 +1,15 @@
 # Lab4说明文档
-## 单机版部署ray
-### 一、配置环境：
-配置环境的步骤如下：
-1. `sudo apt update` 更新软件包；
+## 实验说明
+Ray 是伯克利大学 RISELab 研发的分布式计算系统，它主要有以下的特点：
 
-2. `sudo apt install python3.10` (或者替换其他ray能够支持的python版本)；
-```
-tips: 查看ray适配的python版本可以到https://docs.ray.io/en/latest/ray-overview/installation.html 上查找相关信息
-```
-![alt text](./src/ray对应python版本.png)
+1. 提供一种能够构建、运行分布式应用程序的 simple primitives；
+2. 从单机扩展到平行，几乎不需要改代码；
+3. 拥有良好的生态，能够在 core Ray 上构建复杂的应用程序。
 
-安装完后使用命令`python3 --version`查看是否安装成功
+本次实验实验环境为ustc的vlab虚拟机，步骤为进行ray的单机部署、多机部署以及性能测试等工作。
 
-![alt text](./src/检查python是否安装成功.png)
-
-3. `sudo apt install python3-pip` 安装python的包管理工具，用于安装和管理python包
-
-4. `pip install -U "ray[default]"` 安装ray的默认版本(`-U` 参数告诉 pip 安装时要升级已经安装的包到最新版本`[default]`参数用于安装Ray包时的同时同时安装默认的附加依赖包)
-   
-![alt text](./src/ray的安装成功.png)
-
-5. `pip show ray` 显示其安装路径
-   
-![alt text](./src/ray路径.png)
-
-但此时使用`ray --version`查看ray时它会找不到命令：
-
-![alt text](./src/找不到ray.png)
-
-这是由于ray的安装位置没有被添加到环境变量里，导致命令行在寻找命令时不会到ray的安装位置寻找，这时需要将ray的安装位置添加到环境变量中并进行保存。
-在添加环境变量前先执行命令`ls /home/ubuntu/.local/bin/`检查是否存在`ray`文件：
-
-![alt text](./src/检查ray.png)
-
-这里是存在的，然后执行`echo 'PATH=$PATH:/home/ubuntu/.local/bin' >> ~/.bashrc`以及`source ~/.bashrc`，将ray的安装路径加入到环境变量中并保存，注意这里的`ubuntu`要替换成实际的虚拟机用户名。执行完后应该就能查看ray的版本信息了。
-
-![alt text](./src/查看ray的版本信息.png)
-
-### 二、ray的使用及可视化
-使用以下命令进行头结点的创建：
-`ray start --head --port=6379 --include-dashboard=true --dashboard-host=0.0.0.0 --dashboard-port=8265`
-创建好后会出现以下信息：
-
-![alt text](./src/ray头结点创建输出信息1.png)
-
-![alt text](./src/ray头结点创建输出信息2.png)
-头结点创建后，在虚拟机本地打开浏览器并输入网址`172.31.23.254:8265`进行ray集群的可视化功能体验：
-
-![alt text](./src/ray可视化界面1.png)
-
-![alt text](./src/ray可视化界面2.png)
-在这个网络端口可以查看所有头结点管理的节点及自身的实时工作状态。
-
-### 三、ray部署后的测试
+## 单机版部署ray性能测试
+### 一、测试程序
 我们这里定义了一个简单的任务分发的函数进行测试，测试的源代码如下：
 ```py
 import ray
@@ -80,6 +37,7 @@ ray.shutdown()
 测试的结果为：
 
 ![alt text](./src/ray测试结果.png)
+
 可以看到部署在虚拟机上的ray节点能够正常的连接并进行工作了。
 
     
@@ -250,23 +208,9 @@ for i in range(num_images):
 4. **任务调度和管理优化**：
 Ray 提供了高效的任务调度和管理机制，可以根据配置的资源情况进行智能调度。提升配置参数后，Ray 可以更好地管理和调度任务，确保任务能够按时完成并充分利用资源。这种优化对于大规模数据处理和并行计算特别重要，可以显著提升系统的整体性能。
 
-## 四、分布式ray集群部署
-
-1. 通过以下命令创建ray头结点
-```
-ray start --head --port=6379 --include-dashboard=true --dashboard-host=0.0.0.0 --dashboard-port=8265
-```
-2. 在其他主机中连接该头结点
-```
-ray start --address='172.31.77.207:6379'
-```
-3. 查看头结点状态，发现连接成功
-   
-![alt text](src/image.png)
-
-## 五：分布式ray性能测试
+## 四：分布式ray性能测试
 1. 测试程序
-在单机测试中我们准备的CS程序较为复杂，为便于进行多机部署测试，我们准备了另一个程序————对图片的高斯模糊处理。
+在单机测试中我们准备的CS程序较为复杂，为便于进行多机部署测试，我们准备了另一个程序————对图片的高斯模糊处理（gaussian_blur.py）。
 源码如下：
 ```py
 import os
@@ -326,15 +270,32 @@ blurred_images = process_images(image_dir, radius)
 ### 本机测试性能
 1. 吞吐量(完成时间)：
 ![alt text](src/image-1.png)
-1. 资源使用率（见各面板）：
+
+2. 资源使用率（见各面板）：
+
 ![alt text](src/image-2.png)
+
 ![alt text](src/image-3.png)
+
 ### 分布式部署测试性能
 1. 吞吐量(完成时间)：
+
 ![alt text](src/image-5.png)
-1. 资源使用率（见各面板）：
+
+2. 资源使用率（见各面板）：
+
 ![alt text](src/image-6.png)
+
 ![alt text](src/image-7.png)
 
 ### 性能比较
-可以发现，分布式ray处理50张图片的速度平均为4.58秒，比单机部署ray(9.63秒)在吞吐量（处理时间）上行性能提高了110%，分布式部署ray通过利用多机资源大幅提高了性能。
+可以发现，分布式ray处理50张图片的速度平均为4.58秒，比单机部署ray(9.63秒)在吞吐量（处理时间）上行性能提高了110%。
+
+经小组分析，Ray的多机部署可以显著提高性能,可能有以下几个原因:
+
+1. 并行处理:通过将任务分配到多个机器上并行执行,Ray可以充分利用分布式环境中的计算资源。每个机器可以独立处理分配给 它的任务,从而实现真正的并行计算。这种并行处理可以大大减少任务的总执行时间,提高整体吞吐量。
+
+2. 负载均衡:Ray的任务调度器会自动将任务分配到可用的机器上,以实现负载均衡。当某个机器的任务执行完毕后,调度器会立即将新的任务分配给该机器,确保所有机器的计算资源得到充分利用。这种动态的负载均衡机制可以最大限度地提高系统的资源利用率,避免某些机器过载而其他机器闲置的情况。
+
+3. 数据并行:对于数据并行的任务,如图像处理、数据预处理等,Ray可以将数据分割成多个部分,并将每个部分分配到不同的机器上进行处理。每个机器只需要处理自己分配到的数据,而不需要等待其他机器完成。这种数据并行的方式可以显著加快数据处理的速度,特别是当数据量很大时。
+
