@@ -29,5 +29,5 @@ Project Introduction: OpenHarmony LiteOS-M kernel is a lightweight embedded IoT 
 | Rust Rewriting Attempt | 4.22 - 4.28 | Plan to start rewriting from memory.c, with each person assigned to rewrite specific functions, and finally attempt to combine them. | The rewriting task assignments are annotated in the uploaded liteOS-M/kernel/mm/memory.c file.
 | | 4.29 - 5.12 | Discuss rewriting experiences, focusing on how to handle null pointer rewriting issues, and continue with new rewriting tasks. | Accelerate the rewriting pace and increase the rewriting workload.
 | Lab4 | 5.13 - 6.2 | Discuss the tasks for Lab4 | Decide to choose the ray topic and carry out related tasks.
-| Lab4 | 6.3 - 6.25 | Complete Lab4 related tasks | After selecting the test program, perform single-machine deployment of ray, and conduct distributed deployment and performance testing on the vlab virtual machine.
+|   | 6.3 - 6.25 | Complete Lab4 related tasks | After selecting the test program, perform single-machine deployment of ray, and conduct distributed deployment and performance testing on the vlab virtual machine.
 | Final Sprint | 6.26 - Present | Integrate the rust rewriting results of memory.c and start the rewriting task for task.c | Main person in charge of memory.c rewriting: Qu Jiabin; Main Person in charge of task.c rewriting: Shu Jiahao, Ji Zizhuo, Wu Yuchong
