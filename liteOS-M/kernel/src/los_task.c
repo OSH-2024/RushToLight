@@ -255,6 +255,10 @@ UINT32 OsGetTaskWaterLine(UINT32 taskID)
     return peakUsed;
 }
 
+
+/**********************    前面到这任务分配——————吴宇翀   ******************************/
+
+
 #if (LOSCFG_BASE_CORE_CPUP == 1)
 STATIC UINT32 GetAllTskCpupInfo(CPUP_INFO_S **cpuLessOneSec,
                                 CPUP_INFO_S **cpuTenSec,
@@ -450,6 +454,8 @@ LITE_OS_SEC_TEXT_INIT UINT32 OsTaskInit(VOID)
     g_idleTaskID = OS_INVALID;
     return OsSchedInit();
 }
+
+/**********************     前面到这任务分配——————姬子琢    ******************************/
 
 
 /*****************************************************************************
@@ -657,6 +663,9 @@ LITE_OS_SEC_TEXT_MINOR VOID OsTaskMonInit(VOID)
     return;
 }
 #endif
+
+/**********************  前面到这任务分配——————舒佳豪   ******************************/
+
 
 /*****************************************************************************
  Function    : OsTaskEntry
