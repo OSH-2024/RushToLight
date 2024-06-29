@@ -265,7 +265,7 @@ pub fn OsGetAllTskInfo-> u32 {
     // Ensure LOSCFG_KERNEL_PRINTF is enabled
 #[cfg(feature = "LOSCFG_KERNEL_PRINTF")]{
     let mut taskCB: *mut LosTaskCB = std::ptr::null_mut();
-    let mut loop_num: u32;
+    let mut loop_num: u32=0;
 
     #[cfg(feature = "LOSCFG_BASE_CORE_CPUP")]{
         let mut cpuLessOneSec:*mut CPUP_INFO_S=std::ptr::null_mut();
@@ -374,10 +374,9 @@ pub fn OsGetAllTskInfo-> u32 {
 }*/
 //!!1!!!!LITE_OS_SEC_TEXT_INIT
 fn OsTaskInit->u32{
-    let mut size:u32;
-    let mut index:u32;
+    let mut size:u32=(LOSCFG_BASE_CORE_TSK_LIMIT + 1) * std::mem::size_of::<LosTaskCB>();
+    let mut index:u32=0;
     g_taskMaxNum = LOSCFG_BASE_CORE_TSK_LIMIT + 1;//全局变量
-    let size = (LOSCFG_BASE_CORE_TSK_LIMIT + 1) * std::mem::size_of::<LosTaskCB>();
     g_taskCBArray = (LOS_MemAlloc(m_aucSysMem0, size)) as *mut LosTaskCB;
     if g_taskCBArray.is_null() {
         return LOS_ERRNO_TSK_NO_MEMORY;
