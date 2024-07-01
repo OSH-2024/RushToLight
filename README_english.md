@@ -1,7 +1,8 @@
 # RushToLight: Rewriting Huawei LiteOS with Rust
 ![alt_text](./src/our_logo.jpg)
 
-Project Introduction: OpenHarmony LiteOS-M kernel is a lightweight embedded IoT operating system kernel built for the IoT field. We plan to rewrite Harmony LiteOS-M using RUST to improve its security.
+## Project Introduction
+OpenHarmony LiteOS-M kernel is a lightweight embedded IoT operating system kernel built for the IoT field. We plan to rewrite Harmony LiteOS-M using RUST to improve its security.
 
 **Team Name:** RushToLight
 
