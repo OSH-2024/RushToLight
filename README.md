@@ -14,6 +14,31 @@
 **语言版本: [中文](README.md), [English](README_english.md).**
 
 **OpenHarmony LiteOS-M源码：**[https://gitee.com/openharmony/kernel_liteos_m](https://gitee.com/openharmony/kernel_liteos_m)
+
+## 项目结构
+
+```py
+├─feasibility report #可行性报告
+│  └─src_used #图片
+├─lab4 #ray部署及性能测试报告
+│  └─src #图片
+├─liteOS-M #liteOS_m内核源码
+│  ├─kernel # C语言内核
+│  │  ├─include #头文件
+│  │  │  └─output
+│  │  └─src
+│  │      └─mm #内存模块
+│  └─rust_kernel #Rust、C混合内核
+│      └─kernel
+│          ├─include #头文件
+│          │  └─output
+│          └─src
+│              └─mm #内存模块
+├─mid_term report #中期汇报
+├─research report #调研报告
+└─src #图片
+```
+
 ## 项目进展
 
 | 项目阶段 | 时间 | 项目进展 | 工作安排 |

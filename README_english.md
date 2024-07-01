@@ -15,6 +15,30 @@ Project Introduction: OpenHarmony LiteOS-M kernel is a lightweight embedded IoT 
 
 **Other Language Versions:  [中文](README.md), [English](README_english.md).**
 
+## Project Structure
+
+```py
+├─feasibility report #Feasibility Report
+│  └─src_used #Images
+├─lab4 #Ray Deployment and Performance Testing Report
+│  └─src #Images
+├─liteOS-M #liteOS_m Kernel Source Code
+│  ├─kernel # C Language Kernel
+│  │  ├─include #Header Files
+│  │  │  └─output
+│  │  └─src
+│  │      └─mm #Memory Module
+│  └─rust_kernel #Rust and C Mixed Kernel
+│      └─kernel
+│          ├─include #Header Files
+│          │  └─output
+│          └─src
+│              └─mm #Memory Module
+├─mid_term report #Mid-term Report
+├─research report #Research Report
+└─src #Images
+```
+
 ## Project Progress
 
 | Project Stage | Time | Project Progress | Work Arrangement |
