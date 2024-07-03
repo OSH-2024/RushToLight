@@ -1,7 +1,8 @@
 # RushToLight：Rust改写Harmony LiteOS
 ![alt_text](./src/our_logo.jpg)
 
-项目介绍：OpenHarmony LiteOS-M内核是面向IoT领域构建的轻量级嵌入式物联网操作系统内核。我们打算用RUST改写Harmony LiteOS-M以提高其安全性。
+## 项目介绍
+OpenHarmony LiteOS-M内核是面向IoT领域构建的轻量级嵌入式物联网操作系统内核。我们打算用RUST改写Harmony LiteOS-M以提高其安全性。
 
 **小组名称**：觉悟OS (RushToLight)
 
@@ -14,6 +15,31 @@
 **语言版本: [中文](README.md), [English](README_english.md).**
 
 **OpenHarmony LiteOS-M源码：**[https://gitee.com/openharmony/kernel_liteos_m](https://gitee.com/openharmony/kernel_liteos_m)
+
+## 项目结构
+
+```py
+├─feasibility report #可行性报告
+│  └─src_used #图片
+├─lab4 #ray部署及性能测试报告
+│  └─src #图片
+├─liteOS-M #liteOS_m内核源码
+│  ├─kernel # C语言内核
+│  │  ├─include #头文件
+│  │  │  └─output
+│  │  └─src
+│  │      └─mm #内存模块
+│  └─rust_kernel #Rust、C混合内核
+│      └─kernel
+│          ├─include #头文件
+│          │  └─output
+│          └─src
+│              └─mm #内存模块
+├─mid_term report #中期汇报
+├─research report #调研报告
+└─src #图片
+```
+
 ## 项目进展
 
 | 项目阶段 | 时间 | 项目进展 | 工作安排 |
@@ -29,4 +55,4 @@
 | |4.29 -  5.12| 交流改写心得，着重讨论了怎么处理空指针改写的问题，并且继续新的改写任务。| 加大改写的步伐，增加改写任务量。
 |Lab4  |5.13 - 6.2| 交流lab4的任务 | 决定选题ray，开展相关任务。
 |     |6.3 - 6.25| 完成lab4相关任务 | 选定测试程序后，进行ray的单机部署，并在vlab虚拟机上进行分布式部署和性能测试。
-| 最后冲刺  |6.26 - 现在| 进行memory.c的rust改写结果的整合，开始task.c的改写任务 | memory.c改写主要负责人：区家彬；task.c改写主要负责人：舒佳豪、姬子琢、吴宇翀
+| 最后冲刺  |6.26 - 现在| 进行memory.c的rust改写结果的整合,并进行编译测试 | memory.c改写整合主要负责人：区家彬；编译测试主要负责人：舒佳豪、姬子琢、吴宇翀
