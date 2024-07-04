@@ -48,20 +48,53 @@ use crate::include::los_config_h::LOSCFG_MEM_RECORD_LR_CNT;
 use crate::include::los_config_h::LOSCFG_MEM_LEAKCHECK_RECORD_MAX_NUM;
 use crate::include::los_debug_h::OsBackTraceHookCall;
 use crate::include::los_config_h::LOSCFG_MEM_OMIT_LR_CNT;
+use crate::include::los_hook_h::LOS_HOOK_TYPE_MEM_INIT;
+use crate::include::los_hook_h::LOS_HOOK_TYPE_MEM_ALLOC;
+use crate::include::los_task_h::LOS_CurTaskIDGet;
+use crate::include::los_task_h::LosTaskCB;
+use crate::include::los_config_h::LOSCFG_BASE_CORE_TSK_LIMIT;
+use crate::include::los_hook_h::OS_TASK_STATUS_UNUSED;
 use std::cell::UnsafeCell;
 use std::default::Default;
 use std::os::raw::c_void;
 use std::mem;
 use std::ptr::null_mut;
 extern crate libc;
-use libc::size_t;
+use libc::{size_t,EINVAL};
 use libc::memset;
 use std::ptr;
+pub const EOK: i32 = 0;
 
 extern "C" {
     pub fn memcpy(dest: *mut c_void, src: *const c_void, n: size_t) -> *mut c_void;
 }
 
+fn memset_s(s: *mut libc::c_void, smax: usize, c: libc::c_int, n: usize) -> Result<(), &'static str> {
+    if s.is_null() || n > smax {
+        return Err("Invalid arguments");
+    }
+    unsafe {
+        memset(s, c, n);
+    }
+    Ok(())
+}
+
+// 定义 memcpy_s 函数
+unsafe fn memcpy_s(dest: *mut c_void, destsz: size_t, src: *const c_void, count: size_t) -> i32 {
+    // 检查指针是否为空
+    if dest.is_null() || src.is_null() {
+        return EINVAL; // 返回错误码，表示无效参数
+    }
+
+    // 检查目标大小是否足够
+    if count > destsz {
+        return EINVAL; // 返回错误码，表示无效参数
+    }
+
+    // 执行内存复制
+    memcpy(dest, src, count);
+    EOK // 返回 EOK，表示成功
+}
 #[cfg(feature = "LOSCFG_KERNEL_LMS")]
 use include::los_lms_pri_h::*;
 
@@ -72,7 +105,7 @@ use include::los_lmk_h::*;
 const OS_MEM_EXPAND_ENABLE: u32 = 0;
 
 // 系统内存的起始地址
-static mut m_aucSysMem0: *mut u8 = std::ptr::null_mut();
+static mut m_aucSysMem0: *mut u8 = null_mut();
 
 // g_memStart是一个数组，作为系统堆的存储空间
 #[cfg(not(feature = "LOSCFG_SYS_EXTERNAL_HEAP"))]
@@ -80,7 +113,7 @@ static mut g_memStart: [u8; LOSCFG_SYS_HEAP_SIZE as usize/* 在los_memory_h.rs�
 
 // g_poolHead用于存储多个内存池的头部，如果配置为支持多内存池
 #[cfg(feature = "LOSCFG_MEM_MUL_POOL")]
-static mut g_poolHead: *mut c_void = std::ptr::null_mut();
+static mut g_poolHead: *mut c_void = null_mut();
 
 // TLSF相关宏定义和内联函数，TLSF（Two-Level Segregated Fit）
 const OS_MEM_BITMAP_MASK: u32 = 0x1F;
@@ -135,7 +168,7 @@ pub fn OsMemSlGet(size: u32, fl: u32) -> u32 {
 }
 
 // 在满足指定条件时会触发错误
-#[cfg(all(not(feature = "LOSCFG_TASK_MEM_USED"), feature = "LOSCFG_MEM_FREE_BY_TASKID", any(feature = "LOSCFG_BASE_CORE_TSK_LIMIT_64")))]
+#[cfg(all(not(feature = "LOSCFG_TASK_MEM_USED"), feature = "LOSCFG_MEM_FREE_BY_TASKID", any(feature = "LOSCFG_BASE_CORE_TSK_LIMIT")))]
 compile_error!("When enter here, LOSCFG_BASE_CORE_TSK_LIMIT larger than 63 is not supported");
 
 
@@ -387,7 +420,7 @@ fn OS_MEM_MIDDLE_ADDR_OPEN_END(start_addr: Option<&OsMemPoolHead>, middle_addr: 
 }
 
 // 定义判断中间地址是否在开始和结束地址之间（不包含结束地址）的函数
-fn OS_MEM_MIDDLE_ADDR(start_addr: Option<&mut OsMemPoolHead>, middle_addr: Option<&mut c_void>, end_addr: Option<&mut usize>) -> bool {
+fn OS_MEM_MIDDLE_ADDR(start_addr: Option<&OsMemPoolHead>, middle_addr: Option<&c_void>, end_addr: Option<&usize>) -> bool {
     if let (Some(start_addr), Some(middle_addr), Some(end_addr)) = (start_addr, middle_addr, end_addr) {
         let start_addr_as_u8 = start_addr as *const OsMemPoolHead as *const u8;
         let middle_addr_as_u8 = middle_addr as *const c_void as *const u8;
@@ -435,7 +468,7 @@ fn OS_MEM_MARK_GAP_NODE(node: Option<&mut OsMemNodeHead>) {
 }
 
 #[cfg(feature = "LOSCFG_MEM_MUL_REGIONS")]
-fn OS_MEM_IS_GAP_NODE(node: Option<&mut OsMemNodeHead>) -> bool {
+fn OS_MEM_IS_GAP_NODE(node: Option<&OsMemNodeHead>) -> bool {
     if let Some(node) = node {
         if let Some(prev) = node.ptr.prev {
             return prev == OS_MEM_GAP_NODE_MAGIC as *mut OsMemNodeHead;
@@ -450,7 +483,7 @@ fn OS_MEM_MARK_GAP_NODE(node: Option<&mut OsMemNodeHead>) {
 }
 
 #[cfg(not(feature = "LOSCFG_MEM_MUL_REGIONS"))]
-fn OS_MEM_IS_GAP_NODE(node: Option<&mut OsMemNodeHead>) -> bool {
+fn OS_MEM_IS_GAP_NODE(node: Option<&OsMemNodeHead>) -> bool {
     false // 当不支持多内存区域配置时，间隙节点判断函数始终返回 false
 }
 
@@ -484,10 +517,10 @@ pub fn OsAllMemNodeDoHandle(pool: Option<&mut c_void>, handle: HandleFn, arg: Op
             if tmpNode == endNode {
 #[cfg(feature = "OS_MEM_EXPAND_ENABLE")]
 {   
-                if OsMemIsLastSentinelNode(endNode) == false { 
-                    let size: u32 = OS_MEM_NODE_GET_SIZE((*endNode).sizeAndFlag);
-                    tmpNode = OsMemSentinelNodeGet(endNode) ;    
-                    endNode = OS_MEM_END_NODE(tmpNode, size);
+                if OsMemIsLastSentinelNode(Some(unsafe{&*endNode})) == false { 
+                    let size: u32 = OS_MEM_NODE_GET_SIZE(unsafe{(*endNode).sizeAndFlag});
+                    tmpNode = OsMemSentinelNodeGet(Some(unsafe{&*endNode})).unwrap() as *mut c_void as *mut OsMemNodeHead;    
+                    endNode = OS_MEM_END_NODE(Some(unsafe{&*(tmpNode as *const c_void)}), size as usize).unwrap() as *mut OsMemNodeHead;
                     continue;
                 }
 }
@@ -527,7 +560,7 @@ pub fn GetTaskMemUsedHandle(curNode: &mut OsMemNodeHead, arg: &mut c_void){
 }
 
 #[cfg(feature = "LOSCFG_TASK_MEM_USED")]
-fn OsTaskMemUsed(pool: &mut c_void, tskMemInfoBuf: &u32, tskMemInfoCnt: u32){
+fn OsTaskMemUsed(pool: Option<&mut c_void>, tskMemInfoBuf: &u32, tskMemInfoCnt: u32){
     let mut args: [u32; 2] = [tskMemInfoBuf as usize as u32, tskMemInfoCnt];
     OsAllMemNodeDoHandle(pool, GetTaskMemUsedHandle, args as &mut c_void);
 }
@@ -578,7 +611,7 @@ fn OsMemLastSentinelNodeGet(sentinelNode: Option<&OsMemNodeHead>) -> Option<&mut
 #[inline]
 fn OsMemSentinelNodeCheck(sentinelNode: Option<&OsMemNodeHead>) -> bool {
     if let Some(sentinelNode) = sentinelNode{
-        if !(OS_MEM_NODE_GET_USED_FLAG((*sentinelNode).sizeAndFlag) == 0) {
+        if OS_MEM_NODE_GET_USED_FLAG((*sentinelNode).sizeAndFlag) == 0 {
             return false;
         }
         if !OS_MEM_MAGIC_VALID(Some(sentinelNode)){    
@@ -806,7 +839,7 @@ fn OsMemPoolExpand(pool: Option<&mut c_void>, size: usize, intSave: u32) -> i32 
 #[cfg(feature = "OS_MEM_EXPAND_ENABLE")]
 fn LOS_MemExpandEnable(pool: Option<&mut c_void>) {
     if let Some(pool) = pool {
-        (*(pool as &mut OsMemPoolHead)).info.attr |= OS_MEM_POOL_EXPAND_ENABLE;
+        unsafe{(*(pool as *mut c_void as *mut OsMemPoolHead)).info.attr |= OS_MEM_POOL_EXPAND_ENABLE};
     } else {
         return;
     }
@@ -913,7 +946,7 @@ fn OsLmsReallocResizeMark(node: Option<&OsMemNodeHead>, resize: u32)
 }
 
 
-// #[cfg(LOSCFG_MEM_LEAKCHECK = 1)]   // LOSCFG_MEM_LEAKCHECK 未找到
+// #[cfg(feature = "LOSCFG_MEM_LEAKCHECK")]   // LOSCFG_MEM_LEAKCHECK 未找到
 // mod mem_leakcheck
 // {
     #[derive(Clone, Copy)]
@@ -1017,11 +1050,11 @@ fn OsLmsReallocResizeMark(node: Option<&OsMemNodeHead>, resize: u32)
     fn OsMemNodeBacktraceInfo(tmpNode: &mut OsMemNodeHead, preNode: &mut OsMemNodeHead){
         println!("\n broken node head LR info: \n");
         for i in 0..LOSCFG_MEM_RECORD_LR_CNT{
-            println!(" LR[{:d}]:0x{:x}\n", i, (*tmpNode).linkReg[i]);
+            println!(" LR[{}]:0x{:x}\n", i, (*tmpNode).linkReg[i as usize]);
         }
         println!("\n pre node head LR info: \n");
         for i in 0..LOSCFG_MEM_RECORD_LR_CNT{
-            println!(" LR[{:d}]:0x{:x}\n", i, (*preNode).linkReg[i]);
+            println!(" LR[{}]:0x{:x}\n", i, (*preNode).linkReg[i as usize]);
         }
     }
 // }
@@ -1036,69 +1069,90 @@ fn OsMemFreeListIndexGet(size: u32) -> u32{
     return OS_MEM_SMALL_BUCKET_COUNT/*在los_memory_h.rs里定义*/ + ((fl - OS_MEM_SMALL_BUCKET_COUNT/*在los_memory_h.rs里定义*/) << OS_MEM_SLI/*在los_memory_h.rs里定义*/) + sl;
 }
 
-// #[inline]
-// pub fn OsMemFindCurSuitableBlock(poolHead: &mut OsMemPoolHead, index: u32, size: u32) -> Option<&OsMemFreeNodeHead> {
-//     let mut node: &OsMemPoolHead = (*poolHead).freeList[index];
-//     while(!node.isnull()){
-//         if ((*node).header.sizeAndFlag >= size) {
-//             return (node as &OsMemFreeNodeHead);
-//         }
-//         node = node->next;
-//     }
-//     return std::ptr::null_mut() as &OsMemFreeNodeHead;
-// }
+#[inline]
+pub fn OsMemFindCurSuitableBlock(poolHead: Option<&mut OsMemPoolHead>, index: u32, size: u32) -> Option<&mut OsMemFreeNodeHead> {
+    if let Some(poolHead) = poolHead {
+        let mut node: *mut OsMemFreeNodeHead = (*poolHead).freeList[index as usize];
+        while !node.is_null() {
+            unsafe{if (*node).header.sizeAndFlag >= size {
+                return Some(&mut *node);
+            }
+            node = (*node).next;}
+        }
+        return None;
+    } else {
+        None
+    }
+    
+}
 
-// #[inline]
-// pub fn OsMemNotEmptyIndexGet(poolHead: &mut OsMemPoolHead, index: u32) -> u32 {
-//     let mask: u32 = (*poolHead).freeListBitmap[index >> 5];
-//     mask &= ~((1 << (index & OS_MEM_BITMAP_MASK)) - 1);
-//     if (mask != 0) {
-//         index = OsMemFFS(mask) + (index & ~OS_MEM_BITMAP_MASK);
-//         return index;
-//     }
+#[inline]
+pub fn OsMemNotEmptyIndexGet(poolHead: Option<&mut OsMemPoolHead>, index: u32) -> u32 { 
+    if let Some(poolHead) = poolHead {
+        let mut mask: u32 = (*poolHead).freeListBitmap[index as usize >> 5];
+        mask &= !((1 << (index & OS_MEM_BITMAP_MASK)) - 1);
+        if mask != 0 {
+            let index1 = OsMemFFS(mask) as u32 + (index & !OS_MEM_BITMAP_MASK) ;
+            return index1;
+        }
 
-//     return OS_MEM_FREE_LIST_COUNT/* 在los_memory_h.rs里定义 */;
-// }
+        return OS_MEM_FREE_LIST_COUNT/* 在los_memory_h.rs里定义 */;
+    } else {
+        return OS_MEM_FREE_LIST_COUNT/* 在los_memory_h.rs里定义 */; // 可能有问题，默认值不知道设置成什么
+    }
+}
 
-// #[inline]
-// fn OsMemFindNextSuitableBlock(pool: &mut c_void, size: u32, outIndex: &mut u32) -> Option<&OsMemFreeNodeHead> {
-//     let poolHead: &OsMemPoolHead  = pool as &mut OsMemPoolHead;
-//     let mut fl: u32 = OsMemFlGet(size);
-//     let mut index: u32 = 0;
-//     let mut curIndex = OS_MEM_FREE_LIST_COUNT/* 在los_memory_h.rs里定义 */;
-//     do{
-//         if (fl < OS_MEM_SMALL_BUCKET_COUNT/*在los_memory_h.rs里定义*/) {
-//             index = fl;
-//         } 
-//         else {
-//             let sl = OsMemSlGet(size, fl);
-//             curIndex = ((fl - OS_MEM_SMALL_BUCKET_COUNT/*在los_memory_h.rs里定义*/) << OS_MEM_SLI/*在los_memory_h.rs里定义*/) + sl + OS_MEM_SMALL_BUCKET_COUNT/*在los_memory_h.rs里定义*/;
-//             index = curIndex + 1;
-//         }
+pub fn LOS_Align(x: u32, align: u32) -> u32 {
+    (x + align - 1) & !(align - 1)
+}
 
-//         let tmp = OsMemNotEmptyIndexGet(poolHead, index);
-//         if (tmp != OS_MEM_FREE_LIST_COUNT/* 在los_memory_h.rs里定义 */) {
-//             index = tmp;
-//             *outIndex = index;//change GOTO
-//             return poolHead->freeList[index] as *const c_void;
-//         }
+#[inline]
+fn OsMemFindNextSuitableBlock<'a>(pool: Option<&'a mut c_void>, size: u32, outIndex: Option<&'a mut u32>) -> Option<&'a mut OsMemFreeNodeHead> {
+    if let (Some(pool), Some(outIndex)) = (pool, outIndex) {
+        let poolHead: *const OsMemPoolHead  = pool as *const c_void as *const OsMemPoolHead;
+        let fl: u32 = OsMemFlGet(size);
+        let mut index: u32 = 0;
+        let mut curIndex = OS_MEM_FREE_LIST_COUNT/* 在los_memory_h.rs里定义 */;
+        loop {
+            if fl < OS_MEM_SMALL_BUCKET_COUNT/*在los_memory_h.rs里定义*/ {
+                index = fl;
+            } 
+            else {
+                let sl = OsMemSlGet(size, fl);
+                curIndex = ((fl - OS_MEM_SMALL_BUCKET_COUNT/*在los_memory_h.rs里定义*/) << OS_MEM_SLI/*在los_memory_h.rs里定义*/) + sl + OS_MEM_SMALL_BUCKET_COUNT/*在los_memory_h.rs里定义*/;
+                index = curIndex + 1;
+            }
 
-//         for (index = LOS_Align(index + 1, 32); index < OS_MEM_FREE_LIST_COUNT/* 在los_memory_h.rs里定义 */; index += 32) {
-//             /* 5: Divide by 32 to calculate the index of the bitmap array. */
-//             let mask = poolHead->freeListBitmap[index >> 5];
-//             if (mask != 0) {
-//                 index = OsMemFFS(mask) + index;
-//                 *outIndex = index;
-//                 return poolHead->freeList[index] as &OsMemFreeNodeHead;
-//             }
-//         }
-//     } while(0);
-//     if (curIndex == OS_MEM_FREE_LIST_COUNT/* 在los_memory_h.rs里定义 */) {
-//         return ptr::null_mut() as &OsMemFreeNodeHead;
-//     }
-//     *outIndex = curIndex;
-//     return OsMemFindCurSuitableBlock(poolHead, curIndex, size);
-// }
+            let tmp = unsafe{OsMemNotEmptyIndexGet(Some(&mut *(poolHead as *mut OsMemPoolHead)), index)};
+            if tmp != OS_MEM_FREE_LIST_COUNT/* 在los_memory_h.rs里定义 */ {
+                index = tmp;
+                *outIndex = index;//change GOTO
+                return Some(unsafe{&mut *((*poolHead).freeList[index as usize] as *mut OsMemFreeNodeHead)});
+            }
+            index = LOS_Align(index + 1, 32);
+            while index < OS_MEM_FREE_LIST_COUNT {
+                /* 5: Divide by 32 to calculate the index of the bitmap array. */
+                let mask = unsafe{(*poolHead).freeListBitmap[index as usize >> 5]};
+                if mask != 0 {
+                    index = OsMemFFS(mask) as u32 + index;
+                    *outIndex = index;
+                    return Some(unsafe{&mut *((*poolHead).freeList[index as usize])});
+                }
+                index += 32;
+            }
+
+            break;
+        }
+        if curIndex == OS_MEM_FREE_LIST_COUNT/* 在los_memory_h.rs里定义 */ {
+            return None;
+        }
+        *outIndex = curIndex;
+        return OsMemFindCurSuitableBlock(Some(unsafe{&mut*(poolHead as *mut OsMemPoolHead)}), curIndex, size);
+    } else {
+        None
+    }
+    
+}
 
 #[inline]
 fn OsMemSetFreeListBit(head: Option<&mut OsMemPoolHead>, index: u32) {
@@ -1107,10 +1161,13 @@ fn OsMemSetFreeListBit(head: Option<&mut OsMemPoolHead>, index: u32) {
     }
 }
 
-// #[inline]
-// fn OsMemClearFreeListBit(head: &mut OsMemPoolHead, index: u32){
-//     (*head).freeListBitmap[index >> 5] &= ~(1U << (index & 0x1f));
-// }
+#[inline]
+fn OsMemClearFreeListBit(head: Option<&mut OsMemPoolHead>, index: u32){
+    if let Some(head) = head {
+        (*head).freeListBitmap[index as usize >> 5] &= !(1u32 << (index & 0x1f));
+    }
+    
+}
 
 #[inline]
 fn OsMemListAdd(pool: Option<&mut OsMemPoolHead>, listIndex: u32, node: Option<&mut OsMemFreeNodeHead>) {
@@ -1127,24 +1184,26 @@ fn OsMemListAdd(pool: Option<&mut OsMemPoolHead>, listIndex: u32, node: Option<&
     }
 }
 
-// #[inline]
-// fn OsMemListDelete(pool: &mut OsMemPoolHead, listIndex: u32, node: &mut OsMemFreeNodeHead)
-// {
-//     if (node == pool->freeList[listIndex]) {
-//         (*pool).freeList[listIndex] = (*node).next;
-//         if ((*node).next.isnull()) { 
-//             OsMemClearFreeListBit(pool, listIndex);
-//         } else {
-//             (*node).next.prev = ptr::null_mut() as &mut OsMemFreeNodeHead; 
-//         }
-//     } else {
-//         (*node).next.prev = (*node).next;
-//         if (!node->next.isnull()) {
-//             (*node).next.prev = (*node).prev;
-//         }
-//     }
-//     OS_MEM_SET_MAGIC(&mut (*node).header);
-// }
+#[inline]
+fn OsMemListDelete(pool: Option<&mut OsMemPoolHead>, listIndex: u32, node: Option<&mut OsMemFreeNodeHead>)
+{
+    if let (Some(pool), Some(node)) = (pool, node) {
+        if node as *mut OsMemFreeNodeHead == (*pool).freeList[listIndex as usize] {
+            (*pool).freeList[listIndex as usize] = (*node).next;
+            if (*node).next.is_null() { 
+                OsMemClearFreeListBit(Some(pool), listIndex);
+            } else {
+                unsafe{(*(*node).next).prev = null_mut()}; 
+            }
+        } else {
+            unsafe{(*(*node).next).prev = (*node).next};
+            if !(*node).next.is_null() {
+                unsafe{(*(*node).next).prev = (*node).prev};
+            }
+        }
+        OS_MEM_SET_MAGIC(Some(&mut (*node).header));
+    }
+}
 
 // 向内存池中的空闲节点链表中添加新的空闲节点
 #[inline]
@@ -1161,432 +1220,478 @@ fn OsMemFreeNodeAdd(pool: Option<&mut c_void>, node: Option<&mut OsMemFreeNodeHe
     
 }
 
-// //从内存池中的空闲节点链表中删除指定的空闲节点
-// #[inline]
-// fn OsMemFreeNodeDelete(pool:&mut c_void, mode: &mut OsMemFreeNodeHead){
-//     let mut index: u32 = OsMemFreeListIndexGet(node.header.sizeAndFlag);
-//     OsMemListDelete(&pool,index,&node);
-// }
+//从内存池中的空闲节点链表中删除指定的空闲节点
+#[inline]
+fn OsMemFreeNodeDelete(pool: Option<&mut c_void>, node: Option<&mut OsMemFreeNodeHead>){
+    if let (Some(pool), Some(node)) = (pool, node) {
+        let index: u32 = OsMemFreeListIndexGet((*node).header.sizeAndFlag);
+        unsafe{OsMemListDelete(Some(&mut *(pool as *mut c_void as *mut OsMemPoolHead)), index, Some(node))};
+    }
+}
 
-// #[inline]
-// fn OsMemFreeNodeGet(pool: &mut c_void, size: u32)-> Option<&OsMemNodeHead>{
-//     let mut poolHead: &mut OsMemPoolHead = pool as &mut OsMemPoolHead;
-//     let mut index: u32 = 0;
-//     let first_node: &OsMemFreeNodeHead = OsMemFindNextSuitableBlock(pool, size, &mut index);
-//     if let Some(mut first_node) = first_node {
-//         OsMemListDelete(pool, index, first_node);
-//         Some(&mut first_node.header)
-//     } else {
-//         None
-//     }
-// }
+#[inline]
+fn OsMemFreeNodeGet(pool: Option<&mut c_void>, size: u32) -> Option<&mut OsMemNodeHead>{
+    if let Some(pool) = pool {
+        let poolHead: *mut OsMemPoolHead = pool as *mut c_void as *mut OsMemPoolHead;
+        let mut index: u32 = 0;
+        let first_node: *mut OsMemFreeNodeHead = OsMemFindNextSuitableBlock(Some(pool), size, Some(&mut index)).unwrap() as *const OsMemFreeNodeHead as *mut OsMemFreeNodeHead;
+        if first_node.is_null()
+        {
+            return None;
+        }
+        unsafe{OsMemListDelete(Some(&mut *(pool as *mut c_void as *mut OsMemPoolHead)), index, Some(&mut*first_node ))};
+        Some(unsafe{&mut (*(first_node as *mut OsMemFreeNodeHead)).header})
 
-// #[inline]
-// fn OsMemMergeNode(node: &mut OsMemNodeHead){
-//     let mut nextNode: &mut OsMemNodeHead = null_mut();
-//     (*node).ptr.prev.sizeAndFlag += (*node).sizeAndFlag;
-//     let mut temp: u32 = (node as usize) + (*node).sizeAndFlag;
-//     nextNode = temp as &mut OsMemNodeHead;
-//     if !OS_MEM_NODE_GET_LAST_FLAG((*nextNode).sizeAndFlag) && !OS_MEM_IS_GAP_NODE(nextNode)
-//     {
-//         (*nextNode).ptr.prev = (*node).ptr.prev;
-//     }
-// }
-
-// #[inline]
-// fn OsMemSplitNode(pool: &mut c_void, allocNode: &mut OsMemNodeHead, allocSize: u32) {
-//     let mut newFreeNode: &mut OsMemFreeNodeHead = null_mut();
-//     let mut nextNode: &mut OsMemNodeHead = null_mut();
-//     newFreeNode = (((allocNode as &mut u8).offset(allocSize)) as &mut c_void) as &mut OsMemFreeNodeHead;
-//     (*newFreeNode).header.ptr.prev = allocNode;
-//     (*newFreeNode).header.sizeAndFlag = (*allocNode).sizeAndFlag - allocSize;
-//     (*allocNode).sizeAndFlag = allocSize;
-//     nextNode = OS_MEM_NEXT_NODE(&mut (*newFreeNode).header);
-//     if !OS_MEM_NODE_GET_LAST_FLAG((*nextNode).sizeAndFlag) && !OS_MEM_IS_GAP_NODE(nextNode)
-//     {
-//         (*nextNode).ptr.prev = &mut (*newFreeNode).header;
-//         if(!OS_MEM_NODE_GET_USED_FLAG((*nextNode).sizeAndFlag))
-//         {
-//             OsMemFreeNodeDelete(pool, nextNode as &mut OsMemFreeNodeHead);
-//             OsMemMergeNode(nextNode);
-//         }
-//     }
-//     OsMemFreeNodeAdd(pool, newFreeNode);
-// }
-
-// //创建一个被使用的内存节点
-// #[inline]
-// fn OsMemCreateUsedNode (addr: &mut c_void) -> Option<&c_void> {
-//     let mut node: &mut OsMemUsedNodeHead = addr as &mut OsMemUsedNodeHead;
-// #[cfg(any(feature = "LOSCFG_MEM_FREE_BY_TASKID", feature = "LOSCFG_TASK_MEM_USED"))] 
-// {
-//     OsMemNodeSetTaskID(node);
-// }
-// #[cfg(feature = "LOSCFG_KERNEL_LMS")]
-// {
-//     let mut newNode: &mut OsMemNodeHead = node as &mut OsMemNodeHead;
-//     if !g_lms.is_null()
-//     {
-//         (*g_lms).mallocMark(&mut *newNode, OS_MEM_NEXT_NODE(&(*newNode)), OS_MEM_NODE_HEAD_SIZE);
-//     }
-// }
-//     return node.offset(1) as &mut c_void;
-// }
-
-// //初始化一个内存池
-// #[inline]
-// fn OsMemPoolInit(pool: &mut c_void, size: u32) -> u32{//pool是指针，不是引用
-//     let mut poolHead: &mut OsMemPoolHead = pool as &mut OsMemPoolHead;
-//     let mut newNode: &mut OsMemNodeHead = null_mut();
-//     let mut endNode: &mut OsMemNodeHead = null_mut();
-//     memset_s(&mut *poolHead, size, 0, std::mem::size_of::<OsMemPoolHead>());
-// #[cfg(feature = "LOSCFG_KERNEL_LMS")]
-// {
-//     let mut resize: u32 = 0;
-//     if !g_lms.is_null() {
-//         resize = (*g_lms).init(pool, size);
-//         size = if resize == 0 { size } else { resize };
-//     }
-// }
-//     (*poolHead).info.pool = pool;
-//     (*poolHead).info.totalSize = size;
-//     (*poolHead).info.attr &= ~(OS_MEM_POOL_UNLOCK_ENABLE | OS_MEM_POOL_EXPAND_ENABLE);
-
-//     newNode = OS_MEM_FIRST_NODE(pool);
-//     (*newNode).sizeAndFlag = (size - std::mem::size_of::<OsMemPoolHead>() - OS_MEM_NODE_HEAD_SIZE);
-//     (*newNode).ptr.prev = OS_MEM_END_NODE(pool, size);
-//     OS_MEM_SET_MAGIC(newNode);
-//     OsMemFreeNodeAdd(pool, &mut newNode as &mut OsMemFreeNodeHead);
-
-//     endNode = OS_MEM_END_NODE(pool, size) as &mut OsMemPoolHead;    //返回值为*const OsMemNodeHead
-//     OS_MEM_SET_MAGIC(endNode);
-// #[cfg(OS_MEM_EXPAND_ENABLE = 1)]
-// {
-//     (*endNode).ptr.next = null_mut();
-//     OsMemSentinelNodeSet(endNode, null_mut(), 0);
-//     //fn os_mem_sentinel_node_set(sentinel_node: &mut OsMemNodeHead, new_node: Option<Box<OsMemNodeHead>>, size: usize) 
-// }
-// #[cfg(OS_MEM_EXPAND_ENABLE==0)]
-// {
-//     (*endNode).sizeAndFlag = 0;
-//     (*endNode).ptr.prev = newNode;
-//     OS_MEM_NODE_SET_USED_FLAG((*endNode).sizeAndFlag);
-// }
-// #[cfg(feature = "LOSCFG_MEM_WATERLINE")]
-// {
-//     (*poolHead).info.curUsedSize = std::mem::size_of::<OsMemPoolHead>()+ OS_MEM_NODE_HEAD_SIZE;
-//     (*poolHead).info.waterLine = (*poolHead).info.curUsedSize;
-// }
-
-// #[cfg(feature = "LOSCFG_KERNEL_LMS")]
-// {
-//     if resize != 0 {
-//         OsLmsFirstNodeMark(pool, newNode);
-//     }
-// }
-//     LOS_OK;
-// }
-
-
-// #[cfg(LOSCFG_MEM_MUL_POOL = 1)]
-// {
-//     fn OsMemPoolDeInit(pool: &mut c_void, size: u32){
-//     #[cfg(feature = "LOSCFG_KERNEL_LMS")]
-//     {
-//         if !g_lms.is_null() {
-//             (*g_lms).deInit(pool);
-//         }
-//     }
-//         memset_s(&mut *pool, size, 0,std::mem::size_of::<OsMemPoolHead>());
-//     }
-
-//     //向内存池链表中添加新的内存池
-//     fn OsMemPoolAdd(pool: &mut c_void, size: u32) -> u32 {
-//         let mut nextPool: &mut c_void = g_poolHead;
-//         let mut curPool: &mut c_void = g_poolHead;
-//         let mut poolEnd: usize = 0;
-//         while nextPool != null_mut(){
-//             poolEnd= (nextPool as usize) + LOS_MemPoolSizeGet(nextPool);
-//             if ((pool <= nextPool) && (((pool as usize) + size) > (nextPool as usize))) ||
-//             (((pool as usize) < poolEnd) && (((pool as usize) + size) >= poolEnd))
-//             {
-//                 println!("pool [0x{:x}, 0x{:x}) conflict with pool [0x{:x}, 0x{:x})\n", pool as usize,
-//                         (pool as usize) + size, (nextPool as usize), (nextPool as usize) + LOS_MemPoolSizeGet(nextPool));
-//                 return LOS_NOK;
-//             }
-//             curPool = nextPool;
-//             nextPool = (*(nextPool as &mut OsMemPoolHead)).nextPool;
-//         }
-
-//         if g_poolHead.is_null() {
-//             g_poolHead = pool;
-//         }else {
-//             (*(curPool as &mut OsMemPoolHead)).nextPool = pool;
-//         }
-//         (*(pool as &mut OsMemPoolHead)).nextPool = null_mut();
-//         return LOS_OK;
-//     }
-
-//     fn OsMemPoolDelete(pool: &mut c_void) -> u32 {
-//         let mut ret: u32 = LOS_NOK;
-//         let mut next_pool: &mut c_void = null_mut();
-//         let mut cur_pool: &mut c_void = null_mut();
-//         loop {
-//             if pool == &mut g_poolHead as &const c_void {
-//                 g_poolHead = (*(g_poolHead as &OsMemPoolHead)).nextPool as &c_void;
-//                 ret = LOS_OK;
-//                 break;
-//             }
-
-//             cur_pool = g_poolHead;
-//             next_pool = g_poolHead;
-
-//             while !next_pool.is_null(){
-//                 if pool == next_pool { 
-//                     if let Some(pool_head) = g_poolHead as_mut()
-//                     {
-//                         (*(cur_pool as &mut OsMemPoolHead)).nextPool = (*(pool_head as &const OsMemPoolHead)).nextPool; 
-//                         ret = LOS_OK;
-//                         break;
-//                     }
-//                 }
-//                 cur_pool = next_pool;
-//                 next_pool = (*(next_pool as &mut OsMemPoolHead)).nextPool;
-//             }
-//             break;
-//         }
-//         ret
-//     }
-// }
-
-// pub fn LOS_MemInit(pool: &mut c_void, size: u32) -> u32 {
-
-//     if pool.is_null() || size <= OS_MEM_MIN_POOL_SIZE {
-//         return LOS_NOK;
-//     }
-
-//     if (pool as usize) & (OS_MEM_ALIGN_SIZE - 1) != 0 || size & (OS_MEM_ALIGN_SIZE - 1) != 0 {
-//         println!("LiteOS heap memory address or size configured not aligned: address: 0x{:x}, size: 0x{:x}, alignsize: {}", pool as usize, size, OS_MEM_ALIGN_SIZE);
-//         return LOS_NOK;
-//     }
-
-//     if OsMemPoolInit(pool, size) != 0 {
-//         return LOS_NOK;
-//     }
-
-// #[cfg(LOSCFG_MEM_MUL_POOL = 1)]
-// {
-//     if OsMemPoolAdd(pool, size) != 0 {
-//         OsMemPoolDeInit(pool, size);
-//         return LOS_NOK;
-//     }
-// }
-//     OsHookCall(LOS_HOOK_TYPE_MEM_INIT, pool, size);
-//     //找不到LOS_HOOK_TYPE_MEM_INIT TO BE DONE
-//     //hook_call函数找不到在哪
-//     LOS_OK
-// }
-
-// #[cfg(LOSCFG_MEM_MUL_POOL = 1)]
-// {
-//     fn LOS_MemDeInit(pool: &mut c_void) -> u32 {
-//         let tmpPool: &OsMemPoolHead = pool as &OsMemPoolHead;
-//         if tmpPool.is_null() {
-//             return LOS_NOK;
-//         }
-
-//         let tmp_pool_info = &pool.info;
-
-//         if (*tmpPool).info.pool != pool || (*tmpPool).info.totalSize <= OS_MEM_MIN_POOL_SIZE {
-//             return LOS_NOK;
-//         }
-
-//         if OsMemPoolDelete(tmpPool) != 0 {
-//             return LOS_NOK;
-//         }
-
-//         OsMemPoolDeInit(pool, (*tmpPool).info.totalSize);
-
-//         OsHookCall(LOS_HOOK_TYPE_MEM_DEINIT, tmpPool);  // LOS_HOOK_TYPE_MEM_DEINIT 未找到
-
-//         LOS_OK
-//     }
-
-//     fn LOS_MemPoolList() -> u32 {
-//         let mut next_pool = g_poolHead;
-//         let mut index = 0;
-
-//         while !next_pool.is_null() {
-//             println!("pool{:u} :", index);
-//             index += 1;
-//             OsMemInfoPrint(next_pool);
-//             next_pool = (*(next_pool as &mut OsMemPoolHead)).next_pool ;
-//         }
-//         index
-//     }
-// }
-
-// #[inline]
-// fn OsMemAlloc(pool: &mut OsMemPoolHead, size: u32, int_save: u32) -> Option<&mut c_void> {
-//     let mut alloc_node: &mut OsMemNodeHead = null_mut();
-//     #[cfg(feature = "LOSCFG_BASE_MEM_NODE_INTEGRITY_CHECK")]
-//     if OsMemAllocCheck(pool, int_save) == LOS_NOK {
-//         return null_mut();
-//     }
-//     let allocSize = OS_MEM_ALIGN(size + OS_MEM_NODE_HEAD_SIZE, OS_MEM_ALIGN_SIZE);
-//     loop {
-//         let alloc_node = OsMemFreeNodeGet(pool, alloc_size);
-//         if alloc_node.is_null() {
-//             #[cfg(feature = "OS_MEM_EXPAND_ENABLE")]
-//             {
-//                 if (*pool).info.attr & OS_MEM_POOL_EXPAND_ENABLE != 0 {
-//                     let ret = OsMemPoolExpand(pool, alloc_size, int_save);
-//                     if ret == 0 {
-//                         continue;
-//                     }
-//                 }
-//             }
-//             #[cfg(LOSCFG_KERNEL_LMK = 1)]
-//             {
-//                 let kill_ret = LOS_LmkTasksKill();
-//                 if kill_ret == LOS_OK {
-//                     continue;
-//                 }
-//             }
-//             println!("---------------------------------------------------\
-//                       --------------------------------------------------------");
-//             MEM_UNLOCK(pool, int_save);
-//             OsMemInfoPrint(pool);
-//             MEM_LOCK(pool, int_save);
-//             println!("[{}] No suitable free block, require free node size: 0x{:x}",
-//                      "OsMemAlloc", alloc_size);
-//             println!("----------------------------------------------------\
-//                       -------------------------------------------------------");
-//             return null_mut();
-//         }  
-//     }
+    } else {
+        None
+    }
     
-//     if alloc_size + OS_MEM_MIN_LEFT_SIZE <= (*alloc_node).sizeAndFlag {
-//         OsMemSplitNode(pool, alloc_node, alloc_size);
-//     }
+}
 
-//     OS_MEM_NODE_SET_USED_FLAG((*alloc_node).sizeAndFlag);
-//     OsMemWaterUsedRecord(pool, OS_MEM_NODE_GET_SIZE((*alloc_node).sizeAndFlag));
+#[inline]
+fn OsMemMergeNode(node: Option<&mut OsMemNodeHead>){
+    if let Some(node) = node {
+        let mut nextNode: *mut OsMemNodeHead = null_mut();
+        unsafe{(*(*node).ptr.prev).sizeAndFlag += (*node).sizeAndFlag};
+        let temp: u32 = (node as *mut OsMemNodeHead as u8 as u32) + (*node).sizeAndFlag;
+        nextNode = temp as *mut OsMemNodeHead;
+        if unsafe{OS_MEM_NODE_GET_LAST_FLAG((*nextNode).sizeAndFlag) == 0 && !OS_MEM_IS_GAP_NODE(Some(& *nextNode))}
+        {
+            unsafe{(*nextNode).ptr.prev = (*node).ptr.prev};
+        }
+    }
+}
 
-//     #[cfg(LOSCFG_MEM_LEAKCHECK = 1)]
-//     OsMemLinkRegisterRecord(alloc_node);
+#[inline]
+fn OsMemSplitNode(pool: Option<&mut c_void>, allocNode: Option<&mut OsMemNodeHead>, allocSize: u32) {
+    if let (Some(pool), Some(allocNode)) = (pool, allocNode) {
+        let mut newFreeNode: *mut OsMemFreeNodeHead = null_mut();
+        let mut nextNode: *mut OsMemNodeHead = null_mut();
+        unsafe{newFreeNode = ((allocNode as *mut OsMemNodeHead as *mut u8).offset(allocSize as isize)) as *mut c_void as *mut OsMemFreeNodeHead};
+        unsafe{(*newFreeNode).header.ptr.prev = allocNode};
+        unsafe{(*newFreeNode).header.sizeAndFlag = (*allocNode).sizeAndFlag - allocSize};
+        (*allocNode).sizeAndFlag = allocSize;
+        nextNode = OS_MEM_NEXT_NODE(Some(unsafe{&(*newFreeNode).header})).unwrap() as *mut OsMemNodeHead;
+        if OS_MEM_NODE_GET_LAST_FLAG(unsafe{(*nextNode).sizeAndFlag}) == 0 && !OS_MEM_IS_GAP_NODE(Some(unsafe{&*nextNode}))
+        {
+            unsafe{(*nextNode).ptr.prev = &mut (*newFreeNode).header};
+            if OS_MEM_NODE_GET_USED_FLAG(unsafe{(*nextNode).sizeAndFlag}) == 0
+            {
+                OsMemFreeNodeDelete(Some(pool), Some(unsafe{&mut*(nextNode as *mut OsMemFreeNodeHead)}));
+                OsMemMergeNode(Some(unsafe{&mut*nextNode}));
+            }
+        }
+        OsMemFreeNodeAdd(Some(pool), Some(unsafe{&mut*newFreeNode}));
+    }
+}
 
-//     return OsMemCreateUsedNode(alloc_node as &mut c_void);
-// }
+//创建一个被使用的内存节点
+#[inline]
+fn OsMemCreateUsedNode (addr: Option<&mut c_void>) -> Option<&mut c_void> {
+    if let Some(addr) = addr {
+        let node: *mut OsMemUsedNodeHead = addr as *mut c_void as *mut OsMemUsedNodeHead;
+#[cfg(any(feature = "LOSCFG_MEM_FREE_BY_TASKID", feature = "LOSCFG_TASK_MEM_USED"))] 
+{
+        OsMemNodeSetTaskID(node);
+}
+#[cfg(feature = "LOSCFG_KERNEL_LMS")]
+{
+        let mut newNode: &mut OsMemNodeHead = node as &mut OsMemNodeHead;
+        if !g_lms.is_null()
+        {
+            (*g_lms).mallocMark(&mut *newNode, OS_MEM_NEXT_NODE(&(*newNode)), OS_MEM_NODE_HEAD_SIZE);
+        }
+}
+        return Some(unsafe{&mut*((node as *mut OsMemUsedNodeHead).offset(1) as *mut c_void)});
+    } else {
+        None
+    }
+}
 
-// #[inline]
-// fn LOS_MemAlloc(pool: &mut c_void, size: u32) -> Option<&mut c_void> {
-//     if pool.is_null() || size == 0 {
-//         return null_mut();
-//     }
+//初始化一个内存池
+#[inline]
+fn OsMemPoolInit(pool: Option<&mut c_void>, size: u32) -> u32{//pool是指针，不是引用
+    if let Some(pool) = pool {
+        let poolHead: *mut OsMemPoolHead = pool as *mut c_void as *mut OsMemPoolHead;
+        let mut newNode: *mut OsMemNodeHead = null_mut();
+        let mut endNode: *mut OsMemNodeHead = null_mut();
+        let _ = memset_s(poolHead as *mut c_void, size as usize, 0, std::mem::size_of::<OsMemPoolHead>());
+    #[cfg(feature = "LOSCFG_KERNEL_LMS")]
+    {
+        let mut resize: u32 = 0;
+        if !g_lms.is_null() {
+            resize = (*g_lms).init(pool, size);
+            size = if resize == 0 { size } else { resize };
+        }
+    }
+        unsafe{(*poolHead).info.pool = pool};
+        unsafe{(*poolHead).info.totalSize = size};
+        unsafe{(*poolHead).info.attr &= !(OS_MEM_POOL_UNLOCK_ENABLE | OS_MEM_POOL_EXPAND_ENABLE)};
 
-//     let size1 = if size < OS_MEM_MIN_ALLOC_SIZE {
-//         OS_MEM_MIN_ALLOC_SIZE
-//     } else {
-//         size
-//     };
+        newNode = OS_MEM_FIRST_NODE(Some(&*pool)).unwrap() as *mut OsMemNodeHead ;
+        unsafe{(*newNode).sizeAndFlag = size - std::mem::size_of::<OsMemPoolHead>() as u32 - OS_MEM_NODE_HEAD_SIZE as u32};
+        unsafe{(*newNode).ptr.prev = OS_MEM_END_NODE(Some(&*pool), size as usize).unwrap() as *mut OsMemNodeHead};
+        OS_MEM_SET_MAGIC(Some(unsafe{&mut*newNode}));
+        OsMemFreeNodeAdd(Some(pool), Some(unsafe{&mut*(newNode as *mut OsMemFreeNodeHead)}));
 
-//     let pool_head = pool as &mut OsMemPoolHead;
-//     let mut ptr: &mut c_void = null_mut();
-//     let mut int_save = 0;
+        endNode = OS_MEM_END_NODE(Some(&*pool), size as usize).unwrap() as *mut OsMemNodeHead;    //返回值为*const OsMemNodeHead
+        OS_MEM_SET_MAGIC(Some(unsafe{&mut*endNode}));
+    #[cfg(feature = "OS_MEM_EXPAND_ENABLE")]
+    {
+        unsafe{(*endNode).ptr.next = null_mut()};
+        OsMemSentinelNodeSet(Some(unsafe{&mut*endNode}), None, 0);
+        //fn os_mem_sentinel_node_set(sentinel_node: &mut OsMemNodeHead, new_node: Option<Box<OsMemNodeHead>>, size: usize) 
+    }
+    #[cfg(not(feature = "OS_MEM_EXPAND_ENABLE"))]
+    {
+        unsafe{(*endNode).sizeAndFlag = 0};
+        unsafe{(*endNode).ptr.prev = newNode};
+        OS_MEM_NODE_SET_USED_FLAG(unsafe{&mut ((*endNode).sizeAndFlag)});
+    }
+    #[cfg(feature = "LOSCFG_MEM_WATERLINE")]
+    {
+        unsafe{(*poolHead).info.curUsedSize = (std::mem::size_of::<OsMemPoolHead>() + OS_MEM_NODE_HEAD_SIZE) as u32};
+        unsafe{(*poolHead).info.waterLine = (*poolHead).info.curUsedSize};
+    }
 
-//     MEM_LOCK(pool_head, int_save);
-//     {
-//         if !(OS_MEM_NODE_GET_USED_FLAG(size1) || OS_MEM_NODE_GET_ALIGNED_FLAG(size1)) {
-//             ptr = OsMemAlloc(pool_head, size1, int_save);
-//         }
-//     }
+    #[cfg(feature = "LOSCFG_KERNEL_LMS")]
+    {
+        if resize != 0 {
+            OsLmsFirstNodeMark(pool, newNode);
+        }
+    }
+        LOS_OK
+    } else {
+        LOS_NOK
+    }
+
+}
+
+#[cfg(feature = "LOSCFG_MEM_MUL_POOL")]
+fn OsMemPoolDeInit(pool: Option<&mut c_void>, size: u32){
+    if let Some(pool) = pool {
+    #[cfg(feature = "LOSCFG_KERNEL_LMS")]
+    {
+        if !g_lms.is_null() {
+            (*g_lms).deInit(pool);
+        }
+    }
+        let _ = memset_s(&mut *pool, size as usize, 0,std::mem::size_of::<OsMemPoolHead>());
+    }
+}
+
+//向内存池链表中添加新的内存池
+#[cfg(feature = "LOSCFG_MEM_MUL_POOL")]
+fn OsMemPoolAdd(pool: Option<&mut c_void>, size: u32) -> u32 {
+    if let Some(pool) = pool {
+        let mut nextpool: *mut c_void = unsafe{g_poolHead};
+        let mut curpool: *mut c_void = unsafe{g_poolHead};
+        let mut poolEnd: usize = 0;
+        while nextpool != null_mut(){
+            poolEnd= (nextpool as usize) + LOS_MemPoolSizeGet(Some(unsafe{&*nextpool})) as usize;
+            if ((pool as *const c_void <= nextpool as *const c_void) && (((pool as *mut c_void as usize) + size as usize) > (nextpool as usize))) ||
+            (((pool as *mut c_void as usize) < poolEnd) && (((pool as *mut c_void as usize) + size as usize) >= poolEnd))
+            {
+                println!("pool [0x{:x}, 0x{:x}) conflict with pool [0x{:x}, 0x{:x})", pool as *mut c_void as usize,
+                        (pool as *mut c_void as usize) + size as usize, (nextpool as usize), (nextpool as usize) + LOS_MemPoolSizeGet(Some(unsafe{&*nextpool})) as usize);
+                return LOS_NOK;
+            }
+            curpool = nextpool;
+            nextpool = unsafe{(*(nextpool as *mut OsMemPoolHead)).nextPool};
+        }
+
+        if unsafe{g_poolHead.is_null()} {
+            unsafe{g_poolHead = pool};
+        }else {
+            unsafe{(*(curpool as *mut OsMemPoolHead)).nextPool = pool};
+        }
+        unsafe{(*(pool as *mut c_void as *mut OsMemPoolHead)).nextPool = null_mut()};
+        return LOS_OK;
+    } else {
+        LOS_NOK
+    }
+}
+
+#[cfg(feature = "LOSCFG_MEM_MUL_POOL")]
+fn OsMemPoolDelete(pool: Option<&mut c_void>) -> u32 { 
+    if let Some(pool) = pool {
+        let mut ret: u32 = LOS_NOK;
+        let mut next_pool: *mut c_void = null_mut();
+        let mut cur_pool: *mut c_void = null_mut();
+        loop {
+            if unsafe{pool as *mut c_void == g_poolHead as *mut c_void } {
+                unsafe{g_poolHead = (*(g_poolHead as *mut OsMemPoolHead)).nextPool as *mut c_void};
+                ret = LOS_OK;
+                break;
+            }
+
+            unsafe{cur_pool = g_poolHead};
+            unsafe{next_pool = g_poolHead};
+
+            while !next_pool.is_null() {
+                if pool as *const c_void == next_pool as *const c_void { 
+                    unsafe{(*(cur_pool as *mut OsMemPoolHead)).nextPool = (*(next_pool as *mut OsMemPoolHead)).nextPool}; 
+                    ret = LOS_OK;
+                    break;
+                }
+                cur_pool = next_pool;
+                next_pool = unsafe{(*(next_pool as *mut OsMemPoolHead)).nextPool};
+            }
+            break;
+        }
+        ret
+    } else {
+        LOS_NOK
+    }
     
-//     MEM_UNLOCK(pool_head, int_save);
+}
 
-//     OsHookCall(LOS_HOOK_TYPE_MEM_ALLOC, pool, ptr, size1);
+pub fn OsHookCall(hook_type: u32, pool: Option<&OsMemPoolHead>, size: u32){}
 
-//     ptr
-// }
+pub fn LOS_MemInit(pool: Option<&mut c_void>, size: u32) -> u32 {
+    if let Some(pool) = pool {
+        if size <= OS_MEM_MIN_POOL_SIZE as u32 {
+            return LOS_NOK;
+        }
 
-// fn LOS_MemAllocAlign(pool: *mut c_void, size: u32, boundary: u32) -> Option<&mut c_void> {
-//     let mut gap_size: u32 = 0;
+        if (pool as *mut c_void as usize) & (OS_MEM_ALIGN_SIZE - 1) != 0 || size & (OS_MEM_ALIGN_SIZE - 1) as u32 != 0 {
+            println!("LiteOS heap memory address or size configured not aligned: address: 0x{:x}, size: 0x{:x}, alignsize: {}", pool as *mut c_void as usize, size, OS_MEM_ALIGN_SIZE);
+            return LOS_NOK;
+        }
 
-//     if pool.is_null() || size == 0 || boundary == 0 || !OS_MEM_IS_POW_TWO(boundary) ||
-//         !OS_MEM_IS_ALIGNED(boundary, std::mem::size_of::<*mut c_void>()) {
-//         return null_mut();
-//     }
+        if OsMemPoolInit(Some(pool), size) != 0 {
+            return LOS_NOK;
+        }
 
-//     let mut adjusted_size = size;
-//     if adjusted_size < OS_MEM_MIN_ALLOC_SIZE {
-//         adjusted_size = OS_MEM_MIN_ALLOC_SIZE;
-//     }
+    #[cfg(feature = "LOSCFG_MEM_MUL_POOL")]
+    {
+        if OsMemPoolAdd(Some(pool), size) != 0 {
+            OsMemPoolDeInit(Some(pool), size);
+            return LOS_NOK;
+        }
+    }
+        OsHookCall(LOS_HOOK_TYPE_MEM_INIT,Some(unsafe{&*(pool as *mut c_void as *mut OsMemPoolHead)}), size);
+        LOS_OK
+    } else {
+        LOS_NOK
+    }
+    
+}
 
-//     if boundary.checked_sub(std::mem::size_of::<u32>()).unwrap_or(0) > u32::MAX - adjusted_size {
-//         return null_mut();
-//     }
-//     //  std::mem::size_of::<u32>() 返回 u32 类型的大小（以字节为单位）。
-//     //  boundary.checked_sub(std::mem::size_of::<u32>()) 用于计算 boundary 减去 u32 类型的大小，如果结果超出了 u32 类型的范围，则返回 None。否则返回差值。
-//     //  unwrap_or(0) 如果结果是 Some(value)，则返回 value；如果结果是 None，则返回 0
 
-//     let use_size = (adjusted_size + boundary) - std::mem::size_of::<u32>();
-//     if OS_MEM_NODE_GET_USED_FLAG(use_size) || OS_MEM_NODE_GET_ALIGNED_FLAG(use_size) {
-//         return null_mut();
-//     }
+#[cfg(feature = "LOSCFG_MEM_MUL_POOL")]
+fn LOS_MemDeInit(pool: Option<&mut c_void>) -> u32 {
+    if let Some(pool) = pool {
+        let tmpPool: *mut OsMemPoolHead = pool as *mut c_void as *mut OsMemPoolHead;
+        if tmpPool.is_null() {
+            return LOS_NOK;
+        }
 
-//     let pool_head = pool as &mut OsMemPoolHead;
-//     let mut int_save = 0;
-//     let mut ptr: &mut c_void = null_mut();
-//     let mut aligned_ptr: &mut c_void = null_mut();
+        if unsafe{(*tmpPool).info.pool != pool || (*tmpPool).info.totalSize <= OS_MEM_MIN_POOL_SIZE as u32 } {
+            return LOS_NOK;
+        }
 
-//     MEM_LOCK(pool_head, &mut int_save);
-//     loop {
-//         ptr = OsMemAlloc(pool_head, use_size, int_save);
-//         aligned_ptr = OS_MEM_ALIGN(ptr, boundary) as &mut c_void;
-//         if ptr == aligned_ptr {
-//         #[cfg(feature = "LOSCFG_KERNEL_LMS")]
-//         {
-//             OsLmsAllocAlignMark(ptr, aligned_ptr, size);
-//         }
-//             break;
-//         }
+        if OsMemPoolDelete(Some(unsafe{&mut*(tmpPool as *mut c_void)})) != 0 {
+            return LOS_NOK;
+        }
 
-//         gap_size = (aligned_ptr as u8 - ptr as u8) as u32;
-//         let alloc_node = (ptr as &mut OsMemUsedNodeHead).offset(-1);
-//         OS_MEM_NODE_SET_ALIGNED_FLAG((*alloc_node).header.sizeAndFlag);
-//         OS_MEM_SET_GAPSIZE_ALIGNED_FLAG(gap_size);
+        OsMemPoolDeInit(Some(pool), unsafe{(*tmpPool).info.totalSize});
 
-//         *((aligned_ptr as &mut u32).offset(-1)) = gap_size;
+        // OsHookCall(LOS_HOOK_TYPE_MEM_DEINIT, tmpPool);  // LOS_HOOK_TYPE_MEM_DEINIT 未找到
 
-//         #[cfg(feature = "LOSCFG_KERNEL_LMS")]
-//         {
-//             OsLmsAllocAlignMark(ptr, aligned_ptr, size);
-//         }
-//         ptr = aligned_ptr;
-//         break;
-//     }
-//     MEM_UNLOCK(pool_head, int_save);
-//     OsHookCall(LOS_HOOK_TYPE_MEM_ALLOCALIGN, pool, ptr, size, boundary);
-//     ptr
-// }
+        LOS_OK
+    } else {
+        LOS_NOK
+    }
+}
+
+#[cfg(feature = "LOSCFG_MEM_MUL_POOL")]
+fn LOS_MemPoolList() -> u32 {
+    let mut next_pool = unsafe{g_poolHead};
+    let mut index = 0;
+
+    while !next_pool.is_null() {
+        println!("pool{} :", index);
+        index += 1;
+        OsMemInfoPrint(Some(unsafe{&mut*next_pool}));
+        next_pool = unsafe{(*(next_pool as *mut OsMemPoolHead)).nextPool} ;
+    }
+    index
+}
+
+
+#[inline]
+fn OsMemAlloc(pool: Option<&mut OsMemPoolHead>, size: u32, mut int_save: u32) -> Option<&mut c_void> {
+    if let Some(pool) = pool {
+        let alloc_node: *mut OsMemNodeHead = null_mut();
+        #[cfg(feature = "LOSCFG_BASE_MEM_NODE_INTEGRITY_CHECK")]
+        if OsMemAllocCheck(pool, int_save) == LOS_NOK {
+            return null_mut();
+        }
+        let alloc_size = OS_MEM_ALIGN(size + OS_MEM_NODE_HEAD_SIZE as u32, OS_MEM_ALIGN_SIZE);
+        loop {
+            let alloc_node = unsafe{OsMemFreeNodeGet(Some(&mut *(pool as *mut OsMemPoolHead as *mut c_void)), alloc_size as u32).unwrap() as *const OsMemNodeHead as *mut OsMemNodeHead};
+            if alloc_node.is_null() {
+                #[cfg(feature = "OS_MEM_EXPAND_ENABLE")]
+                {
+                    if (*pool).info.attr & OS_MEM_POOL_EXPAND_ENABLE != 0 {
+                        let ret = OsMemPoolExpand(Some(unsafe{&mut*(pool as *mut OsMemPoolHead as *mut c_void)}), alloc_size, int_save);
+                        if ret == 0 {
+                            continue;
+                        }
+                    }
+                }
+                #[cfg(feature = "LOSCFG_KERNEL_LMK")]
+                {
+                    let kill_ret = LOS_LmkTasksKill();
+                    if kill_ret == LOS_OK {
+                        continue;
+                    }
+                }
+                println!("---------------------------------------------------\
+                        --------------------------------------------------------");
+                MEM_UNLOCK(Some(pool), &mut int_save);
+                OsMemInfoPrint(Some(unsafe{&mut*(pool as *mut OsMemPoolHead as *mut c_void)}));
+                MEM_LOCK(Some(pool), &mut int_save);
+                println!("[{}] No suitable free block, require free node size: 0x{:x}",
+                        "OsMemAlloc", alloc_size);
+                println!("----------------------------------------------------\
+                        -------------------------------------------------------");
+                return None;
+            }
+
+            if alloc_size + OS_MEM_MIN_LEFT_SIZE <= unsafe{(*alloc_node).sizeAndFlag as usize} {
+                OsMemSplitNode(Some(unsafe{&mut *(pool as *mut OsMemPoolHead as *mut c_void)}), Some(unsafe{&mut *alloc_node}), alloc_size as u32);
+            }
+
+            OS_MEM_NODE_SET_USED_FLAG(unsafe{&mut (*alloc_node).sizeAndFlag});
+            OsMemWaterUsedRecord(Some(pool), OS_MEM_NODE_GET_SIZE(unsafe{(*alloc_node).sizeAndFlag}));
+
+            #[cfg(feature = "LOSCFG_MEM_LEAKCHECK")]
+            OsMemLinkRegisterRecord(Some(unsafe{&mut*alloc_node}));
+
+            return OsMemCreateUsedNode(Some(unsafe{&mut*(alloc_node as *mut c_void)}));
+        }
+    } else {
+        None
+    }
+
+}
+
+#[inline]
+fn LOS_MemAlloc(pool: Option<&mut c_void>, size: u32) -> Option<&mut c_void> {
+    if let Some(pool) = pool {
+        if size == 0 {
+            return None;
+        }
+
+        let size1 = if size < OS_MEM_MIN_ALLOC_SIZE {
+            OS_MEM_MIN_ALLOC_SIZE
+        } else {
+            size
+        };
+
+        let pool_head = pool as *mut c_void as *mut OsMemPoolHead;
+        let mut ptr: *mut c_void = null_mut();
+        let mut int_save: u32 = 0;
+
+        MEM_LOCK(Some(unsafe{&mut*pool_head}), &mut int_save);
+        {
+            if OS_MEM_NODE_GET_USED_FLAG(size1) != 0 || OS_MEM_NODE_GET_ALIGNED_FLAG(size1) != 0 {
+                ptr = OsMemAlloc(Some(unsafe{&mut*pool_head}), size1, int_save).unwrap() as *mut c_void;
+            }
+        }
+        
+        MEM_UNLOCK(Some(unsafe{&mut*pool_head}), &mut int_save);
+
+        // OsHookCall(LOS_HOOK_TYPE_MEM_ALLOC, pool, ptr, size1); 参数数量不对，不管了
+
+        Some(unsafe{&mut*ptr})
+    }
+    else {
+        None
+    }
+}
+
+fn LOS_MemAllocAlign(pool: Option<&mut c_void>, size: u32, boundary: u32) -> Option<&mut c_void> {
+    if let Some(pool) = pool {
+        let mut gap_size: u32 = 0;
+        if size == 0 || boundary == 0 || !OS_MEM_IS_POW_TWO(boundary) ||
+            !OS_MEM_IS_ALIGNED(boundary, std::mem::size_of::<*mut c_void>()) {
+            return None;
+        }
+
+        let mut adjusted_size = size;
+        if adjusted_size < OS_MEM_MIN_ALLOC_SIZE {
+            adjusted_size = OS_MEM_MIN_ALLOC_SIZE;
+        }
+
+        if boundary.checked_sub(std::mem::size_of::<u32>() as u32).unwrap_or(0) > u32::MAX - adjusted_size {
+            return None;
+        }
+
+        let use_size = (adjusted_size + boundary) - std::mem::size_of::<u32>() as u32;
+        if OS_MEM_NODE_GET_USED_FLAG(use_size) != 0 || OS_MEM_NODE_GET_ALIGNED_FLAG(use_size) != 0{
+            return None;
+        }
+
+        let pool_head = pool as *mut c_void as *mut OsMemPoolHead;
+        let mut int_save = 0;
+        let mut ptr: *mut c_void = null_mut();
+        let mut aligned_ptr: *mut c_void = null_mut();
+
+        MEM_LOCK(Some(unsafe{&mut*pool_head}), &mut int_save);
+        loop {
+            ptr = OsMemAlloc(Some(unsafe{&mut*pool_head}), use_size, int_save).unwrap() as *mut c_void;
+            aligned_ptr = OS_MEM_ALIGN(ptr as u32, boundary as usize) as *mut c_void;
+            if ptr == aligned_ptr {
+            #[cfg(feature = "LOSCFG_KERNEL_LMS")]
+            {
+                OsLmsAllocAlignMark(ptr, aligned_ptr, size);
+            }
+                break;
+            }
+
+            gap_size = (aligned_ptr as u8 - ptr as u8) as u32;
+            let alloc_node = unsafe{(ptr as *mut OsMemUsedNodeHead).offset(-1)};
+            OS_MEM_NODE_SET_ALIGNED_FLAG(unsafe{&mut (*alloc_node).header.sizeAndFlag});
+            OS_MEM_SET_GAPSIZE_ALIGNED_FLAG(&mut gap_size);
+
+            unsafe{*((aligned_ptr as *mut u32).offset(-1)) = gap_size};
+
+            #[cfg(feature = "LOSCFG_KERNEL_LMS")]
+            {
+                OsLmsAllocAlignMark(ptr, aligned_ptr, size);
+            }
+            ptr = aligned_ptr;
+            break;
+        }
+        MEM_UNLOCK(Some(unsafe{&mut*pool_head}), &mut int_save);
+        // OsHookCall(LOS_HOOK_TYPE_MEM_ALLOCALIGN, pool, ptr, size, boundary); 参数数量不对，不管了
+        Some(unsafe{&mut*ptr})
+    } else {
+        None
+    }
+    
+}
 
 #[inline]
 fn OsMemAddrValidCheck(pool: Option<&OsMemPoolHead>, addr: Option<&c_void>) -> bool {
     if let (Some(pool), Some(addr)) = (pool, addr) {
-        let size = (*pool).info.totalSize;
+        let mut size = (*pool).info.totalSize;
         let pool_ptr: *const OsMemPoolHead = pool as *const OsMemPoolHead;
         if OS_MEM_MIDDLE_ADDR_OPEN_END(Some(unsafe{&*pool_ptr.offset(1)}), Some(&*addr), Some(&(pool_ptr as usize + size as usize))) {
             return true;
         }
 #[cfg(feature = "OS_MEM_EXPAND_ENABLE")]
 {
-        let mut node: &mut OsMemNodeHead = null_mut();
-        let mut sentinel: &mut OsMemNodeHead = OS_MEM_END_NODE(pool, size);
-        while !OsMemIsLastSentinelNode(sentinel) {
-            size = OS_MEM_NODE_GET_SIZE((*sentinel).sizeAndFlag) ;
-            node = OsMemSentinelNodeGet(sentinel);
-            sentinel = OS_MEM_END_NODE(node, size);
-            if OS_MEM_MIDDLE_ADDR_OPEN_END(node, addr as usize, (node as usize + size) as usize) {
+        let mut node: *mut OsMemNodeHead = null_mut();
+        let mut sentinel: *mut OsMemNodeHead = OS_MEM_END_NODE(Some(unsafe{&*(pool as *const OsMemPoolHead as *const c_void)}), size as usize).unwrap() as *mut OsMemNodeHead;
+        while !OsMemIsLastSentinelNode(Some(unsafe{&*sentinel})) {
+            size = OS_MEM_NODE_GET_SIZE(unsafe{(*sentinel).sizeAndFlag}) ;
+            node = OsMemSentinelNodeGet(Some(unsafe{&*sentinel})).unwrap() as *mut c_void as *mut OsMemNodeHead;
+            sentinel = OS_MEM_END_NODE(Some(unsafe{&*(node as *const c_void)}), size as usize).unwrap() as *mut OsMemNodeHead;
+            if unsafe{OS_MEM_MIDDLE_ADDR_OPEN_END(Some(&*(node as *mut OsMemNodeHead as *const OsMemPoolHead)), Some(&*(addr as *const c_void)), Some(&((node as *mut OsMemNodeHead as usize + size as usize) as usize)))} {
                 return true;
             }
         }
@@ -1598,404 +1703,456 @@ fn OsMemAddrValidCheck(pool: Option<&OsMemPoolHead>, addr: Option<&c_void>) -> b
 
 }
 
-// #[inline]
-// fn OsMemIsNodeValid(node: &OsMemNodeHead, start_node: &OsMemNodeHead, 
-//                     end_node: &OsMemNodeHead, pool_info: &OsMemPoolHead) -> bool {
-//     if !OS_MEM_MIDDLE_ADDR(start_node, node, end_node) {
-//         return false;
-//     }
+#[inline]
+fn OsMemIsNodeValid(node: Option<&OsMemNodeHead>, start_node: Option<&OsMemNodeHead>, 
+                    end_node: Option<&OsMemNodeHead>, pool_info: Option<&OsMemPoolHead>) -> bool {
+    if let (Some(node), Some(start_node), Some(end_node), Some(pool_info)) = (node, start_node, end_node, pool_info) {
+        if unsafe{!OS_MEM_MIDDLE_ADDR(Some(&*(start_node as *const OsMemNodeHead as *const OsMemPoolHead)), Some(&*(node as *const OsMemNodeHead as *const c_void)), Some(&*(end_node as *const OsMemNodeHead as *const usize)))} {
+            return false;
+        }
 
-//     if OS_MEM_NODE_GET_USED_FLAG((*node).sizeAndFlag) {
-//         if !OS_MEM_MAGIC_VALID(node) {
-//             return false;
-//         }
-//         return true;
-//     }
+        if OS_MEM_NODE_GET_USED_FLAG((*node).sizeAndFlag) != 0{
+            if !OS_MEM_MAGIC_VALID(Some(node)) {
+                return false;
+            }
+            return true;
+        }
 
-//     if !OsMemAddrValidCheck(pool_info, (*node).ptr.prev) {
-//         return false;
-//     }
+        if !OsMemAddrValidCheck(Some(pool_info), unsafe{Some(&*((*node).ptr.prev as *const c_void))}) {
+            return false;
+        }
 
-//     true
-// }
+        true
+    } else {
+        false
+    }
+    
+}
 
-// #[inline]
-// fn OsMemCheckUsedNode(pool: &OsMemPoolHead, node: &OsMemNodeHead) -> u32 {
-//     let mut start_node = OS_MEM_FIRST_NODE(pool) as &OsMemNodeHead;
-//     let mut end_node = OS_MEM_END_NODE(pool, (*pool).info.totalSize) as &OsMemNodeHead;
-//     let mut next_node: &OsMemNodeHead = null_mut();
-//     let mut done_flag = false;
+#[inline]
+fn OsMemCheckUsedNode(pool: Option<&OsMemPoolHead>, node: Option<&OsMemNodeHead>) -> u32 {
+    if let (Some(pool), Some(node)) = (pool, node) {
+        let mut start_node = unsafe{OS_MEM_FIRST_NODE(Some(&*(pool as *const OsMemPoolHead as *const c_void))).unwrap() as *mut OsMemNodeHead};
+        let mut end_node = unsafe{OS_MEM_END_NODE(Some(&*(pool as *const OsMemPoolHead as *const c_void)), (*pool).info.totalSize as usize).unwrap() as *mut OsMemNodeHead};
+        let mut next_node: *mut OsMemNodeHead = null_mut();
+        let mut done_flag = false;
 
-//     loop {
-//         loop {
-//             if OS_MEM_IS_GAP_NODE(node) {
-//                 break;
-//             }
+        loop {
+            loop {
+                if OS_MEM_IS_GAP_NODE(Some(node)) {
+                    break;
+                }
 
-//             if !OsMemIsNodeValid(node, start_node, end_node, pool) {
-//                 break;
-//             }
+                if unsafe{!OsMemIsNodeValid(Some(node), Some(&*(start_node)), Some(&*(end_node)), Some(pool))} {
+                    break;
+                }
 
-//             if !OS_MEM_NODE_GET_USED_FLAG((*node).sizeAndFlag) {
-//                 break;
-//             }
+                if OS_MEM_NODE_GET_USED_FLAG((*node).sizeAndFlag) == 0{
+                    break;
+                }
 
-//             next_node = OS_MEM_NEXT_NODE(node);
-//             if !OsMemIsNodeValid(next_node, start_node, end_node, pool) {
-//                 break;
-//             }
+                next_node = OS_MEM_NEXT_NODE(Some(node)).unwrap() as *mut OsMemNodeHead;
+                if unsafe{!OsMemIsNodeValid(Some(&*next_node), Some(&*start_node), Some(&*end_node), Some(pool))} {
+                    break;
+                }
 
-//             if !OS_MEM_NODE_GET_LAST_FLAG((*next_node).sizeAndFlag) && !OS_MEM_IS_GAP_NODE(next_node){
-//                 if (*next_node).ptr.prev != node {
-//                     break;
-//                 }
-//             }
+                if unsafe{OS_MEM_NODE_GET_LAST_FLAG((*next_node).sizeAndFlag) == 0 && !OS_MEM_IS_GAP_NODE(Some(&*next_node))} {
+                    if unsafe{(*next_node).ptr.prev as *const OsMemNodeHead != node as *const OsMemNodeHead} {
+                        break;
+                    }
+                }
 
-//             if node != start_node &&
-//                 (!OsMemIsNodeValid((*node).ptr.prev, start_node, end_node, pool) || OS_MEM_NEXT_NODE((*node).ptr.prev) != node) {
-//                 break;
-//             }
-//             done_flag = true;
-//         }
+                if node as *const OsMemNodeHead != start_node as *const OsMemNodeHead &&
+                    unsafe{!OsMemIsNodeValid(Some(&*((*node).ptr.prev)), Some(&*start_node), Some(&*end_node), Some(pool)) || OS_MEM_NEXT_NODE(Some(&*((*node).ptr.prev))).unwrap() as *const OsMemNodeHead != node as *const OsMemNodeHead} {
+                    break;
+                }
+                done_flag = true;
+            }
 
-//         if !done_flag {
-// #[cfg(feature = "OS_MEM_EXPAND_ENABLE")]
-// {
-//                 if !OsMemIsLastSentinelNode(end_node) {
-//                     start_node = OsMemSentinelNodeGet(end_node);
-//                     end_node = OS_MEM_END_NODE(start_node, OS_MEM_NODE_GET_SIZE((*end_node).sizeAndFlag));
-//                     continue;
-//                 }
-// }
-//             return LOS_NOK;
-//         }
-//         break;
-//     }
+            if !done_flag {
+    #[cfg(feature = "OS_MEM_EXPAND_ENABLE")]
+    {
+                    if !OsMemIsLastSentinelNode(Some(unsafe{&*end_node})) {
+                        start_node = OsMemSentinelNodeGet(Some(unsafe{&*end_node})).unwrap() as *mut c_void as *mut OsMemNodeHead;
+                        unsafe{end_node = OS_MEM_END_NODE(Some(&*(start_node as *const c_void)), OS_MEM_NODE_GET_SIZE((*end_node).sizeAndFlag) as usize).unwrap() as *mut OsMemNodeHead};
+                        continue;
+                    }
+    }
+                return LOS_NOK;
+            }
+            break;
+        }
 
-//     LOS_OK
-// }
+        LOS_OK
+    } else {
+        LOS_NOK
+    }
+    
+}
 
-// #[inline]
-// fn OsMemFree(pool: &mut OsMemPoolHead, node: &mut OsMemNodeHead) -> u32 {
-//     let ret = OsMemCheckUsedNode(pool, node);
-//     if ret != LOS_OK {
-//         println!("OsMemFree check error!\n");
-//         return ret;
-//     }
+#[inline]
+fn OsMemFree(pool: Option<&mut OsMemPoolHead>, node: Option<&mut OsMemNodeHead>) -> u32 {
+    if let (Some(pool), Some(mut node)) = (pool, node) {
+        let ret = OsMemCheckUsedNode(Some(&*pool), Some(&*node));
+        if ret != LOS_OK {
+            println!("OsMemFree check error!\n");
+            return ret;
+        }
 
-// #[cfg(feature = "LOSCFG_MEM_WATERLINE")]
-// {
-//     (*pool).info.curUsedSize -= OS_MEM_NODE_GET_SIZE((*node).sizeAndFlag);
-// }
+    #[cfg(feature = "LOSCFG_MEM_WATERLINE")]
+    {
+        (*pool).info.curUsedSize -= OS_MEM_NODE_GET_SIZE((*node).sizeAndFlag);
+    }
 
-//     (*node).sizeAndFlag = OS_MEM_NODE_GET_SIZE((*node).sizeAndFlag);
+        (*node).sizeAndFlag = OS_MEM_NODE_GET_SIZE((*node).sizeAndFlag);
 
-// #[cfg(LOSCFG_MEM_LEAKCHECK = 1)]
-// {
-//     OsMemLinkRegisterRecord(node);
-// }
+    #[cfg(feature = "LOSCFG_MEM_LEAKCHECK")]
+    {
+        OsMemLinkRegisterRecord(Some(node));
+    }
 
-// #[cfg(feature = "LOSCFG_KERNEL_LMS")]
-// {
-//     let next_node_backup: &OsMemNodeHead = OS_MEM_NEXT_NODE(node);
-//     let cur_node_backup: &OsMemNodeHead = node;
-//     if !g_lms.is_null() {
-//         (*g_lms).check((node as usize + OS_MEM_NODE_HEAD_SIZE) as usize, true);
-//     }
-// }
-//     let pre_node: &OsMemNodeHead = (*node).ptr.prev ;
-//     if !pre_node.is_null() && !OS_MEM_NODE_GET_USED_FLAG((*pre_node).sizeAndFlag) {
-//         OsMemFreeNodeDelete(pool, pre_node as &mut OsMemFreeNodeHead);
-//         OsMemMergeNode(node);
-//         node = pre_node;
-//     }
+    #[cfg(feature = "LOSCFG_KERNEL_LMS")]
+    {
+        let next_node_backup: *mut OsMemNodeHead = OS_MEM_NEXT_NODE(node);
+        let cur_node_backup: *mut OsMemNodeHead = node as *mut OsMemNodeHead;
+        if !g_lms.is_null() {
+            (*g_lms).check((node as usize + OS_MEM_NODE_HEAD_SIZE) as usize, true);
+        }
+    }
+        let pre_node: *mut OsMemNodeHead = unsafe{(*node).ptr.prev} ;
+        if !pre_node.is_null() && OS_MEM_NODE_GET_USED_FLAG(unsafe{(*pre_node).sizeAndFlag}) == 0 {
+            unsafe{OsMemFreeNodeDelete(Some(&mut*(pool as *mut OsMemPoolHead as *mut c_void)), Some(&mut *(pre_node as *mut OsMemFreeNodeHead)))};
+            OsMemMergeNode(Some(node));
+            node = unsafe{&mut*pre_node};
+        }
 
-//     let next_node: &OsMemNodeHead = OS_MEM_NEXT_NODE(node);
-//     if !next_node.is_null() && !OS_MEM_NODE_GET_USED_FLAG((*next_node).sizeAndFlag) {
-//         OsMemFreeNodeDelete(pool, next_node as &mut OsMemFreeNodeHead);
-//         OsMemMergeNode(next_node);
-//     }
+        let next_node: *mut OsMemNodeHead = OS_MEM_NEXT_NODE(Some(&*node)).unwrap() as *mut OsMemNodeHead;
+        if !next_node.is_null() && OS_MEM_NODE_GET_USED_FLAG(unsafe{(*next_node).sizeAndFlag}) == 0 {
+            unsafe{OsMemFreeNodeDelete(Some(&mut *(pool as *mut OsMemPoolHead as *mut c_void)), Some(&mut*(next_node as *mut OsMemFreeNodeHead)))};
+            OsMemMergeNode(Some(unsafe{&mut*next_node}));
+        }
 
-// #[cfg(feature = "OS_MEM_EXPAND_ENABLE")]
-// {
-//     if (*pool).info.attr & OS_MEM_POOL_EXPAND_ENABLE != 0 {
-//         let first_node: &OsMemNodeHead = OS_MEM_FIRST_NODE(pool) ;
-//         if ((*node).ptr.prev > node) && (node != first_node) {
-//             if TryShrinkPool(pool, node) {
-//                 return LOS_OK;
-//             }
-//         }
-//     }
-// }
-//     OsMemFreeNodeAdd(pool, node as &mut OsMemFreeNodeHead);
+    #[cfg(feature = "OS_MEM_EXPAND_ENABLE")]
+    {
+        if (*pool).info.attr & OS_MEM_POOL_EXPAND_ENABLE != 0 {
+            let first_node: *mut OsMemNodeHead = OS_MEM_FIRST_NODE(Some(unsafe{&*(pool as *mut OsMemPoolHead as *const c_void)})).unwrap() as *mut OsMemNodeHead;
+            if (unsafe{(*node).ptr.prev as *const _ > node as *const _}) && (node as *const OsMemNodeHead != first_node as *const OsMemNodeHead) {
+                if TryShrinkPool(Some(unsafe{&*(pool as *mut OsMemPoolHead as *const c_void)}), Some(&*node)) {
+                    return LOS_OK;
+                }
+            }
+        }
+    }
+        unsafe{OsMemFreeNodeAdd(Some(&mut *(pool as *mut OsMemPoolHead as *mut c_void)), Some(&mut *(node as *mut OsMemNodeHead as *mut OsMemFreeNodeHead)))};
 
-// #[cfg(feature = "LOSCFG_KERNEL_LMS")]
-// {
-//     if !g_lms.is_null() {
-//         unsafe {
-//             (*g_lms).freeMark(cur_node_backup, next_node_backup, OS_MEM_NODE_HEAD_SIZE);
-//         }
-//     }
-// }
-//     ret
-// }
+    #[cfg(feature = "LOSCFG_KERNEL_LMS")]
+    {
+        if !g_lms.is_null() {
+            unsafe {
+                (*g_lms).freeMark(cur_node_backup, next_node_backup, OS_MEM_NODE_HEAD_SIZE);
+            }
+        }
+    }
+        ret
+    } else {
+        LOS_NOK
+    }
+    
+}
 
-// #[inline]
-// fn OsGetRealPtr(pool: &c_void, ptr: &mut c_void) -> Option<&mut c_void> {
-//     let mut real_ptr = ptr;
-//     let gap_size = *(ptr.offset(-(mem::size_of::<u32>() as isize)) as &u32);
-//     if os_mem_gapsize_check(gap_size) {
-//         println!("[{}:{}]gapSize:0x{:x} error", function_name!(), line!(), gap_size);
-//         return null_mut();
-//     }
-//     if OS_MEM_GET_GAPSIZE_ALIGNED_FLAG(gap_size) != 0 {
-//         let gap_size_aligned = OS_MEM_GET_ALIGNED_GAPSIZE(gap_size);
-//         if gap_size_aligned & (OS_MEM_ALIGN_SIZE - 1) != 0 ||
-//             gap_size_aligned > (ptr as usize - OS_MEM_NODE_HEAD_SIZE - pool as usize) {
-//                 println!("[{}:{}]gapSize:0x{:x} error", function_name!(), line!(), gap_size);
-//             return null_mut();
-//         }
-//         real_ptr = (ptr as usize - gap_size_aligned as usize) as &mut c_void;
-//     }
-//     real_ptr
-// }
+#[inline]
+fn OsGetRealPtr<'a>(pool: Option<&'a c_void>, ptr: Option<&'a mut c_void>) -> Option<&'a mut c_void> {
+    if let (Some(pool), Some(ptr)) = (pool, ptr) {
+        let mut real_ptr: *mut c_void = ptr as *mut c_void;
+        let gap_size = unsafe{*((ptr as *mut c_void).offset(-(mem::size_of::<u32>() as isize)) as *mut u32)};
+        if OS_MEM_GAPSIZE_CHECK(gap_size) {
+            println!("[{}:{}]gapSize:0x{:x} error", function_name!(), line!(), gap_size);
+            return None;
+        }
+        if OS_MEM_GET_GAPSIZE_ALIGNED_FLAG(gap_size) != 0 {
+            let gap_size_aligned = OS_MEM_GET_ALIGNED_GAPSIZE(gap_size);
+            if gap_size_aligned & (OS_MEM_ALIGN_SIZE - 1) as u32 != 0 ||
+                gap_size_aligned > (ptr as *mut c_void as usize - OS_MEM_NODE_HEAD_SIZE - pool as *const c_void as usize) as u32{
+                    println!("[{}:{}]gapSize:0x{:x} error", function_name!(), line!(), gap_size);
+                return None;
+            }
+            real_ptr = unsafe{&mut*((ptr as *mut c_void as usize - gap_size_aligned as usize) as *mut c_void)};
+        }
+        unsafe{Some(&mut*real_ptr)}  
+    } else {
+        None
+    }
+    
+}
 
-// pub fn LOS_MemFree(pool: &mut c_void, ptr: &mut c_void) -> u32 {
-//     if pool.isnull() || ptr.is_null() || !OS_MEM_IS_ALIGNED(pool, std::mem::size_of::<&mut c_void>()) || !OS_MEM_IS_ALIGNED(ptr, std::mem::size_of::<&mut c_void>()) {
-//         return LOS_NOK;
-//     }
+pub fn LOS_MemFree(pool: Option<&mut c_void>, ptr: Option<&mut c_void>) -> u32 {
+    if let (Some(pool), Some(ptr)) = (pool, ptr) {
+        if !OS_MEM_IS_ALIGNED(pool as *const c_void, std::mem::size_of::<&mut c_void>()) || !OS_MEM_IS_ALIGNED(ptr as *const c_void, std::mem::size_of::<&mut c_void>()).clone() {
+            return LOS_NOK;
+        }
 
-//     OsHookCall(LOS_HOOK_TYPE_MEM_FREE, pool, ptr);
+        // OsHookCall(LOS_HOOK_TYPE_MEM_FREE, pool, ptr);
 
-//     let mut ret = LOS_NOK;
-//     let pool_head= pool as &mut OsMemPoolHead;
-//     let mut node: &mut OsMemPoolHead = null_mut();
-//     let mut int_save: u32 = 0;
+        let mut ret = LOS_NOK;
+        let pool_head = pool as *mut c_void as *mut OsMemPoolHead;
+        let mut node: *mut OsMemNodeHead = null_mut();
+        let mut int_save: u32 = 0;
 
-//     MEM_LOCK(pool_head, &mut int_save);
-//     loop {
-//         let real_ptr = OsGetRealPtr(pool, ptr);
-//         if real_ptr.isnull() {
-//             break;
-//         }
-//         node = ((real_ptr as usize) - OS_MEM_NODE_HEAD_SIZE) as &mut OsMemNodeHead;
-//         ret = OsMemFree(pool_head, node);
-//         break;
-//     }
-//     MEM_UNLOCK(pool_head, int_save);
+        MEM_LOCK(Some(unsafe{&mut*pool_head}), &mut int_save);
+        loop {
+            let real_ptr = OsGetRealPtr(Some(&*pool), Some(ptr)).unwrap() as *mut c_void;
+            if real_ptr.is_null() {
+                break;
+            }
+            node = ((real_ptr as usize) - OS_MEM_NODE_HEAD_SIZE) as *mut OsMemNodeHead;
+            ret = unsafe{OsMemFree(Some(&mut*pool_head), Some(&mut*node))};
+            break;
+        }
+        unsafe{MEM_UNLOCK(Some(&mut*pool_head), &mut int_save)};
 
-//     ret
-// }
+        ret
+    } else {
+        LOS_NOK
+    }
+    
+}
 
-// #[inline]
-// fn OsMemReAllocSmaller(pool: &mut c_void, alloc_size: u32, node: &mut OsMemNodeHead, node_size: u32) {
-// #[cfg(feature = "LOSCFG_MEM_WATERLINE")]
-// {
-//     let mut pool_info = pool as &mut OsMemPoolHead;
-// }
-//     (*node).sizeAndFlag = node_size;
-//     if (alloc_size + OS_MEM_MIN_LEFT_SIZE) <= node_size {
-//         OsMemSplitNode(pool, node, alloc_size);
-// #[cfg(feature = "LOSCFG_MEM_WATERLINE")]
-// {
-//         (*pool_info).info.curUsedSize -= node_size - alloc_size;
-// }
-// #[cfg(feature = "LOSCFG_KERNEL_LMS")]
-// {
-//         OsLmsReallocSplitNodeMark(node);
-// }
+#[inline]
+fn OsMemReAllocSmaller(pool: Option<&mut c_void>, alloc_size: u32, node: Option<&mut OsMemNodeHead>, node_size: u32) {
+    if let (Some(pool), Some(node)) = (pool, node) {
+        let pool_info = pool as *mut c_void as *mut OsMemPoolHead;
+        (*node).sizeAndFlag = node_size;
+        if (alloc_size + OS_MEM_MIN_LEFT_SIZE as u32) <= node_size {
+            OsMemSplitNode(Some(pool), Some(node), alloc_size);
+    #[cfg(feature = "LOSCFG_MEM_WATERLINE")]
+    {
+            unsafe{(*pool_info).info.curUsedSize -= node_size - alloc_size};
+    }
+    #[cfg(feature = "LOSCFG_KERNEL_LMS")]
+    {
+            OsLmsReallocSplitNodeMark(node);
+    }  
+        } else {
+    #[cfg(feature = "LOSCFG_KERNEL_LMS")]
+    {
+            OsLmsReallocResizeMark(node, alloc_size);
+    }
+        }
+        OS_MEM_NODE_SET_USED_FLAG(&mut (*node).sizeAndFlag);
+    #[cfg(feature = "LOSCFG_MEM_LEAKCHECK")]
+    {
+        OsMemLinkRegisterRecord(Some(node));
+    }
+    }
+}
+
+#[inline]
+fn OsMemMergeNodeForReAllocBigger(pool: Option<&mut c_void>, alloc_size: u32, node: Option<&mut OsMemNodeHead>, node_size: u32, next_node: Option<&mut OsMemNodeHead>) {
+    if let (Some(pool),Some(node),Some(next_node)) = (pool, node, next_node) {
+        (*node).sizeAndFlag = node_size;
+        unsafe{OsMemFreeNodeDelete(Some(pool), Some(&mut *(next_node as *mut OsMemNodeHead as *mut OsMemFreeNodeHead)))};
+        OsMemMergeNode(Some(next_node));
+    #[cfg(feature = "LOSCFG_KERNEL_LMS")]
+    {
+        OsLmsReallocMergeNodeMark(node);
+    }
+        if (alloc_size + OS_MEM_MIN_LEFT_SIZE as u32) <= (*node).sizeAndFlag {
+            OsMemSplitNode(Some(pool), Some(node), alloc_size);
+    #[cfg(feature = "LOSCFG_KERNEL_LMS")]
+    {
+        OsLmsReallocSplitNodeMark(node);
+    }
+        } else {
+    #[cfg(feature = "LOSCFG_KERNEL_LMS")]
+    {
+        OsLmsReallocResizeMark(node, alloc_size);
+    }
+        }
+        OS_MEM_NODE_SET_USED_FLAG(&mut (*node).sizeAndFlag);
+        unsafe{OsMemWaterUsedRecord(Some(&mut *(pool as *mut c_void as *mut OsMemPoolHead)), OS_MEM_NODE_GET_SIZE((*node).sizeAndFlag) - node_size)};
+    #[cfg(feature = "LOSCFG_MEM_LEAKCHECK")]
+    {
+        OsMemLinkRegisterRecord(Some(node));
+    }
+    }
+    
+}
+
+#[inline]
+fn OsMemRealloc<'a>(pool: Option<&'a mut OsMemPoolHead>, ptr: Option<&'a c_void>, node: Option<&'a mut OsMemNodeHead>, size: u32, mut int_save: u32) -> Option<&'a mut c_void> {
+    if let (Some(pool), Some(ptr), Some(node)) = (pool, ptr, node) {
+        let mut next_node: *mut OsMemNodeHead = null_mut();
+        let alloc_size: u32 = OS_MEM_ALIGN(size + OS_MEM_NODE_HEAD_SIZE as u32, OS_MEM_ALIGN_SIZE) as u32;
+        let node_size: u32 = OS_MEM_NODE_GET_SIZE((*node).sizeAndFlag);
+        let mut tmp_ptr: *mut c_void = null_mut();
+        let ptr_unsafe_cell = UnsafeCell::new(ptr);
+        if node_size >= alloc_size {
+            unsafe{OsMemReAllocSmaller(Some(&mut*(pool as *mut OsMemPoolHead as *mut c_void)), alloc_size, Some(node), node_size)};
+            return Some(unsafe{&mut*(ptr_unsafe_cell.get() as *mut c_void)}) ;
+        }
+
+        next_node = OS_MEM_NEXT_NODE(Some(&mut*node)).unwrap() as *mut OsMemNodeHead;
+        if unsafe{OS_MEM_NODE_GET_USED_FLAG((*next_node).sizeAndFlag)== 0 && ((*next_node).sizeAndFlag + node_size) >= alloc_size} {
+            unsafe{OsMemMergeNodeForReAllocBigger(Some(&mut*(pool as *mut OsMemPoolHead as *mut c_void)), alloc_size, Some(node), node_size, Some(&mut*next_node))};
+            return Some(unsafe{&mut*(ptr_unsafe_cell.get() as *mut c_void)});
+        }
+
+        tmp_ptr = OsMemAlloc(Some(pool), size, int_save).unwrap() as *mut c_void;
+        if !tmp_ptr.is_null() {
+            if unsafe{memcpy_s(tmp_ptr, size as usize, ptr, (node_size - OS_MEM_NODE_HEAD_SIZE as u32) as usize) != EOK }{
+                MEM_UNLOCK(Some(pool), &mut int_save);
+                unsafe{LOS_MemFree(Some(&mut*(pool as *mut OsMemPoolHead as *mut c_void)), Some(&mut*tmp_ptr))};
+                MEM_LOCK(Some(pool), &mut int_save);
+                return None;
+            }
+            OsMemFree(Some(pool), Some(node));
+        }
+        Some(unsafe{&mut*tmp_ptr})
+    }   else {
+        None
+    }
+}
+
+fn LOS_MemRealloc<'a>(pool: Option<&'a mut c_void>, ptr: Option<&'a mut c_void>, size: u32) -> Option<&'a mut c_void> {
+    if pool.is_none()
+    {
+        return None;
+    }
+    else if ptr.is_none()
+    {
+        return LOS_MemAlloc(pool, size);
+    }
+    else {
+        if let (Some(pool), Some(ptr)) = (pool, ptr) {
+        if OS_MEM_NODE_GET_USED_FLAG(size) != 0 || OS_MEM_NODE_GET_ALIGNED_FLAG(size) != 0 {
+            return None;
+        }
+        // OsHookCall(LOS_HOOK_TYPE_MEM_REALLOC, pool, ptr, size);
+
+        if size == 0 {
+            LOS_MemFree(Some(pool), Some(ptr));
+            return None;
+        }
+
+        let size = if size < OS_MEM_MIN_ALLOC_SIZE {
+            OS_MEM_MIN_ALLOC_SIZE
+        } else {
+            size
+        };
+
+        let pool_head: *mut OsMemPoolHead = pool as *mut c_void as *mut OsMemPoolHead;
+        let mut node: *mut OsMemNodeHead = null_mut();
+        let mut new_ptr: *mut c_void = null_mut();
+        let mut int_save: u32 = 0;
+
+        MEM_LOCK(Some(unsafe{&mut*pool_head}), &mut int_save);
+        loop {
+            let ptr1 = OsGetRealPtr(Some(pool), Some(ptr)).unwrap() as *mut c_void;
+            if ptr1.is_null() {
+                break;
+            }
+
+            node = (ptr1 as usize - std::mem::size_of::<OsMemNodeHead>()) as *mut OsMemNodeHead;
+            if OsMemCheckUsedNode(Some(unsafe{&*(pool as *mut c_void as *mut OsMemPoolHead)}), Some(unsafe{&*node})) != 0 {
+                break;
+            }
+
+            new_ptr = unsafe{OsMemRealloc(Some(&mut *(pool as *mut c_void as *mut OsMemPoolHead)), Some(&*ptr1), Some(&mut*node), size, int_save).unwrap() as *mut c_void};
+        }
+        MEM_UNLOCK(Some(unsafe{&mut*pool_head}), &mut int_save);
+
+        Some(unsafe{&mut*new_ptr})
+    } else {
+        None
+    }
+    } 
+}
+
+#[cfg(feature = "LOSCFG_MEM_FREE_BY_TASKID")]
+fn MemNodeFreeByTaskIDHandle(cur_node: Option<&mut OsMemNodeHead>, arg: Option<&mut c_void>) {
+    if let (Some(cur_node), Some(arg)) = (cur_node, arg) {
+        let args = arg as *mut u32;
+        let task_id = *args;
+        let pool_head = (*(args.offset(1)) as usize) as &mut OsMemPoolHead;
         
-//     } else {
-// #[cfg(feature = "LOSCFG_KERNEL_LMS")]
-// {
-//         OsLmsReallocResizeMark(node, alloc_size);
-// }
-//     }
-//     OS_MEM_NODE_SET_USED_FLAG((*node).sizeAndFlag);
-// #[cfg(LOSCFG_MEM_LEAKCHECK = 1)]
-// {
-//     OsMemLinkRegisterRecord(node);
-// }
-// }
+        if OS_MEM_NODE_GET_USED_FLAG((*cur_node).sizeAndFlag) == 0 {
+            return;
+        }
+        let node = cur_node as &mut OsMemUsedNodeHead;
+        if (*node).header.taskID == task_id {
+            OsMemFree(pool_head, &mut (*node).header);
+        }
+    }
+    
+}
 
-// #[inline]
-// fn OsMemMergeNodeForReAllocBigger(pool: &mut c_void, alloc_size: u32, node: &mut OsMemNodeHead, node_size: u32, next_node: &mut OsMemNodeHead) {
-//     (*node).sizeAndFlag = node_size;
-//     OsMemFreeNodeDelete(pool, next_node as &mut OsMemFreeNodeHead);
-//     OsMemMergeNode(next_node);
-// #[cfg(feature = "LOSCFG_KERNEL_LMS")]
-// {
-//     OsLmsReallocMergeNodeMark(node);
-// }
-//     if (alloc_size + OS_MEM_MIN_LEFT_SIZE) <= (*node).sizeAndFlag {
-//         OsMemSplitNode(pool, node, alloc_size);
-// #[cfg(feature = "LOSCFG_KERNEL_LMS")]
-// {
-//     OsLmsReallocSplitNodeMark(node);
-// }
-//     } else {
-// #[cfg(feature = "LOSCFG_KERNEL_LMS")]
-// {
-//     OsLmsReallocResizeMark(node, alloc_size);
-// }
-//     }
-//     OS_MEM_NODE_SET_USED_FLAG((*node).sizeAndFlag);
-//     OsMemWaterUsedRecord(pool as &mut OsMemPoolHead, OS_MEM_NODE_GET_SIZE((*node).sizeAndFlag) - node_size);
-// #[cfg(LOSCFG_MEM_LEAKCHECK = 1)]
-// {
-//     OsMemLinkRegisterRecord(node);
-// }
-// }
+#[cfg(feature = "LOSCFG_MEM_FREE_BY_TASKID")]
+pub fn LOS_MemFreeByTaskID(pool: Option<&mut c_void>, task_id: u32) -> u32 {
+    if let Some(pool) = pool {
+        let args: [u32; 2] = [task_id, (pool as *mut c_void as usize) as u32];
 
-// #[inline]
-// fn OsMemRealloc(pool: &mut OsMemPoolHead, ptr: &c_void, node: &mut OsMemNodeHead, size: u32, int_save: u32) -> Option<&mut c_void> {
+        if pool.is_null() || task_id >= LOSCFG_BASE_CORE_TSK_LIMIT/*在los_config_h.rs里定义*/ {
+            return LOS_NOK;
+        }
 
-//     let mut next_node: &mut OsMemNodeHead = null_mut();
-//     let alloc_size: u32 = OS_MEM_ALIGN(size + OS_MEM_NODE_HEAD_SIZE, OS_MEM_ALIGN_SIZE);
-//     let node_size: u32 = OS_MEM_NODE_GET_SIZE((*node).sizeAndFlag);
-//     let mut tmp_ptr: &mut c_void = null_mut();
+        OsAllMemNodeDoHandle(pool, MemNodeFreeByTaskIDHandle, args as &mut c_void);
+        LOS_OK
+    } else {
+        LOS_NOK
+    }
+    
+}
 
-//     if node_size >= alloc_size {
-//         OsMemReAllocSmaller(pool, alloc_size, node, node_size);
-//         return ptr as &mut c_void;
-//     }
 
-//     next_node = OS_MEM_NEXT_NODE(node);
-//     if !OS_MEM_NODE_GET_USED_FLAG((*next_node).sizeAndFlag) && ((*next_node).sizeAndFlag + node_size) >= alloc_size {
-//         OsMemMergeNodeForReAllocBigger(pool, alloc_size, node, node_size, next_node);
-//         return ptr as &mut c_void;
-//     }
+pub fn LOS_MemPoolSizeGet(pool: Option<&c_void>) -> u32{
+    if let Some(pool) = pool {
+        let mut count: u32 = 0;
+        count += unsafe{(*(pool as *const c_void as *const OsMemPoolHead)).info.totalSize};
+    #[cfg(feature = "LOSCFG_MEM_MUL_REGIONS")] {
+        count -= unsafe{(*(pool as *const c_void as *const OsMemPoolHead)).info.totalGapSize};
+    }
+    #[cfg(feature = "OS_MEM_EXPAND_ENABLE")]{
+        let mut size: u32 = 0;
+        let mut node: *mut OsMemNodeHead = null_mut();
+        let mut sentinel: *mut OsMemNodeHead = OS_MEM_END_NODE(Some(pool), count as usize).unwrap() as *mut OsMemNodeHead;
 
-//     tmp_ptr = OsMemAlloc(pool, size, int_save);
-//     if !tmp_ptr.is_null() {
-//         if memcpy_s(tmp_ptr, size as usize, ptr, (node_size - OS_MEM_NODE_HEAD_SIZE) as usize) != EOK {
-//             MEM_UNLOCK(pool, int_save);
-//             LOS_MemFree(pool as &mut c_void, tmp_ptr as &mut c_void);
-//             MEM_LOCK(pool, int_save);
-//             return null_mut();
-//         }
-//         OsMemFree(pool, node);
-//     }
-//     tmp_ptr
-// }
+        while !OsMemIsLastSentinelNode(Some(unsafe{&*sentinel})) {
+            size = OS_MEM_NODE_GET_SIZE(unsafe{(*sentinel).sizeAndFlag});
+            node = OsMemSentinelNodeGet(Some(unsafe{&*sentinel})).unwrap() as *mut c_void as *mut OsMemNodeHead;
+            sentinel = OS_MEM_END_NODE(Some(unsafe{&*(node as *const c_void)}), size as usize).unwrap() as *mut OsMemNodeHead;
+            count += size;
+        }       
+    }
+        count
+    } else {
+        LOS_NOK
+    }
 
-// fn LOS_MemRealloc(pool: &mut c_void, ptr: &mut c_void, size: u32) -> Option<&mut c_void> {
-//     if pool.is_null() || OS_MEM_NODE_GET_USED_FLAG(size) || OS_MEM_NODE_GET_ALIGNED_FLAG(size) {
-//         return null_mut();
-//     }
+}
 
-//     OsHookCall(LOS_HOOK_TYPE_MEM_REALLOC, pool, ptr, size);
+fn MemUsedGetHandle(curNode: Option<&mut OsMemNodeHead>, arg: Option<&mut c_void>){
+    if let (Some(curNode), Some(arg)) = (curNode, arg) {
+        let memUsed: *mut u32 = arg as *mut c_void as *mut u32;
+        unsafe{
+        if OS_MEM_IS_GAP_NODE(Some(curNode)) {
+            *memUsed += OS_MEM_NODE_HEAD_SIZE as u32;
+        } else if OS_MEM_NODE_GET_USED_FLAG((*curNode).sizeAndFlag) != 0{
+            *memUsed += OS_MEM_NODE_GET_SIZE((*curNode).sizeAndFlag);
+        }}
+        return;
+    }
+}
 
-//     if ptr.is_null() {
-//         return LOS_MemAlloc(pool, size);
-//     }
-
-//     if size == 0 {
-//         LOS_MemFree(pool, ptr);
-//         return null_mut();
-//     }
-
-//     let size = if size < OS_MEM_MIN_ALLOC_SIZE {
-//         OS_MEM_MIN_ALLOC_SIZE
-//     } else {
-//         size
-//     };
-
-//     let pool_head: &mut OsMemNodeHead = pool as &mut OsMemPoolHead;
-//     let mut node: &mut OsMemNodeHead = null_mut();
-//     let mut new_ptr: &mut c_void = null_mut();
-//     let mut int_save: u32 = 0;
-
-//     MEM_LOCK(pool_head, int_save);
-//     loop {
-//         ptr = OsGetRealPtr(pool, ptr);
-//         if ptr.is_null() {
-//             break;
-//         }
-
-//         node = (ptr as usize - std::mem::size_of::<OsMemNodeHead>()) as &mut OsMemNodeHead;
-//         if OsMemCheckUsedNode(pool, node) != 0 {
-//             break;
-//         }
-
-//         new_ptr = OsMemRealloc(pool, ptr, node, size, int_save);
-//     }
-//     MEM_UNLOCK(pool_head, int_save);
-
-//     new_ptr
-// }
-
-// #[cfg(feature = "LOSCFG_MEM_FREE_BY_TASKID")]
-// {
-//     fn MemNodeFreeByTaskIDHandle(cur_node: &mut OsMemNodeHead, arg: &mut c_void) {
-//         let args = arg as &mut u32;
-//         let task_id = *args;
-//         let pool_head = (*(args.offset(1)) as usize) as &mut OsMemPoolHead;
-        
-//         if !OS_MEM_NODE_GET_USED_FLAG((*cur_node).sizeAndFlag) {
-//             return;
-//         }
-//         let node = cur_node as &mut OsMemUsedNodeHead;
-//         if (*node).header.taskID == task_id {
-//             OsMemFree(pool_head, &mut (*node).header);
-//         }
-//     }
-
-//     pub fn LOS_MemFreeByTaskID(pool: &mut c_void, task_id: u32) -> u32 {
-//         let args: [u32; 2] = [task_id, (pool as usize) as u32];
-
-//         if pool.is_null() || task_id >= LOSCFG_BASE_CORE_TSK_LIMIT/*在los_config_h.rs里定义*/ {
-//             return LOS_NOK;
-//         }
-
-//         OsAllMemNodeDoHandle(pool, MemNodeFreeByTaskIDHandle, args as &mut c_void);
-//         LOS_OK
-//     }
-// }
-
-// pub fn LOS_MemPoolSizeGet(pool: &c_void) -> u32{
-//     let mut count: u32 = 0;
-//     if pool.is_null() {
-//         LOS_NOK;
-//     }
-
-//     count += (*(pool as &mut OsMemPoolHead)).info.totalSize;
-// #[cfg(LOSCFG_MEM_MUL_REGIONS==1)] {
-//     count -= (*(pool as &mut OsMemPoolHead)).info.totalGapSize;
-// }
-// #[cfg(feature = "OS_MEM_EXPAND_ENABLE")]{
-//     let mut size: u32 = 0;
-//     let mut node: &mut OsMemNodeHead = null_mut();
-//     let mut sentinel: &mut OsMemNodeHead = OS_MEM_END_NODE(pool, count);
-
-//     while !OsMemIsLastSentinelNode(sentinel) {
-//         size = OS_MEM_NODE_GET_SIZE((*sentinel).sizeAndFlag);
-//         node = OsMemSentinelNodeGet(sentinel);
-//         sentinel = OS_MEM_END_NODE(node, size);
-//         count += size;
-//     }       
-// }
-//     count;
-// }
-
-// fn MemUsedGetHandle(curNode: &OsMemNodeHead, arg: &mut c_void){
-//     let mut memUsed: &mut u32 = arg as &mut u32;
-//     if OS_MEM_IS_GAP_NODE(curNode) {
-//         *memUsed += OS_MEM_NODE_HEAD_SIZE;
-//     } else if OS_MEM_NODE_GET_USED_FLAG((*curNode).sizeAndFlag) {
-//         *memUsed += OS_MEM_NODE_GET_SIZE((*curNode).sizeAndFlag);
-//     }
-//     return;
-// }
-
-// pub fn LOS_MemTotalUsedGet(pool: &mut c_void) -> u32{
-//     let mut memUsed: u32 = 0;
-//     if pool.is_null() {
-//         LOS_NOK;
-//     }
-//     OsAllMemNodeDohandle(pool, MemUsedGetHandle, memUsed as &mut c_void);
-//     memUsed;
-// }
+pub fn LOS_MemTotalUsedGet(pool: Option<&mut c_void>) -> u32{
+    if let Some(pool) = pool {
+        let memUsed: u32 = 0;
+        OsAllMemNodeDoHandle(Some(pool), MemUsedGetHandle, Some(unsafe{&mut*(memUsed as *mut c_void)}));
+        memUsed
+    } else {
+        LOS_NOK
+    }
+    
+}
 
 #[inline]
 fn OsMemMagicCheckPrint(tmpNode: Option<&mut *mut OsMemNodeHead>){ 
@@ -2042,7 +2199,7 @@ fn OsMemIntegrityCheckSub(tmpNode: Option<&mut *mut OsMemNodeHead>, pool: Option
             return LOS_NOK;
         }
 
-        if OS_MEM_NODE_GET_USED_FLAG((**tmpNode).sizeAndFlag) != 0 {
+        if OS_MEM_NODE_GET_USED_FLAG((**tmpNode).sizeAndFlag) == 0 {
             if OsMemAddrValidCheckPrint(Some(pool), Some(&mut (*tmpNode as *mut OsMemFreeNodeHead))) != 0 {
                 return LOS_NOK;
             }
@@ -2108,13 +2265,13 @@ fn OsMemPoolHeadCheck(pool: Option<&OsMemPoolHead>){
     }
     #[cfg(feature = "OS_MEM_EXPAND_ENABLE")] {
             let mut size: u32 = 0;
-            let mut node: &mut OsMemNodeHead = null_mut();
-            let mut sentinel: &mut OsMemNodeHead = OS_MEM_END_NODE(pool, (*pool).info.totalSize);
-            while !OsMemIsLastSentinelNode(sentinel) {
-                size = OS_MEM_NODE_GET_SIZE((*sentinel).sizeAndFlag);
-                node = OsMemSentinelNodeGet(sentinel);
-                sentinel = OS_MEM_END_NODE(node, size);
-                println!("expand node info: nodeAddr: 0x{:x}, nodeSize: 0x{:x}\n", node, size);
+            let mut node: *mut OsMemNodeHead = null_mut();
+            let mut sentinel: *mut OsMemNodeHead = OS_MEM_END_NODE(Some(unsafe{&*(pool as *const OsMemPoolHead as *const c_void)}), (*pool).info.totalSize as usize).unwrap() as *mut OsMemNodeHead;
+            while !OsMemIsLastSentinelNode(Some(unsafe{&*sentinel})) {
+                size = OS_MEM_NODE_GET_SIZE(unsafe{(*sentinel).sizeAndFlag});
+                node = OsMemSentinelNodeGet(Some(unsafe{&*sentinel})).unwrap() as *mut c_void as *mut OsMemNodeHead;
+                unsafe{sentinel = OS_MEM_END_NODE(Some(&*(node as *const c_void)), size as usize).unwrap() as *mut OsMemNodeHead};
+                println!("expand node info: nodeAddr: 0x{:x}, nodeSize: 0x{:x}\n", node as usize, size);
             }
     }
         }
@@ -2130,7 +2287,7 @@ fn OsMemIntegrityCheck(pool: Option<&mut OsMemPoolHead>, tmp_node: Option<&mut *
         OsMemPoolHeadCheck(Some(pool));
 
         *pre_node = unsafe{*(OS_MEM_FIRST_NODE(Some(&mut*(pool as *mut OsMemPoolHead as *mut c_void))).as_mut().unwrap()) as *mut OsMemNodeHead};
-        if let Some(end_node) = end_node {
+        if let Some(mut end_node) = end_node {
             loop {
                 while *tmp_node < end_node {
                     if unsafe{OS_MEM_IS_GAP_NODE(Some(&mut **tmp_node))} {
@@ -2146,9 +2303,9 @@ fn OsMemIntegrityCheck(pool: Option<&mut OsMemPoolHead>, tmp_node: Option<&mut *
 
 #[cfg(feature = "OS_MEM_EXPAND_ENABLE")]
 {
-                if !OsMemIsLastSentinelNode(*tmp_node) {
-                    *pre_node = OsMemSentinelNodeGet(*tmp_node);
-                    end_node = OS_MEM_END_NODE(*pre_node, OS_MEM_NODE_GET_SIZE((*tmp_node).sizeAndFlag));
+                if !OsMemIsLastSentinelNode(Some(unsafe{&*(*tmp_node)})) {
+                    unsafe{*pre_node = OsMemSentinelNodeGet(Some(&*(*tmp_node))).unwrap() as *mut c_void as *mut OsMemNodeHead};
+                    unsafe{end_node = OS_MEM_END_NODE(Some(&*(*pre_node as *const c_void)), OS_MEM_NODE_GET_SIZE((*(*tmp_node)).sizeAndFlag) as usize).unwrap()};
                     continue;
                 } 
 }
@@ -2168,34 +2325,39 @@ fn OsMemNodeInfo(tmp_node: Option<&OsMemNodeHead>, pre_node: Option<&OsMemNodeHe
     let mut used_node: *mut OsMemUsedNodeHead = null_mut();
     let mut free_node: *mut OsMemFreeNodeHead = null_mut();
 
-    if let (Some(ref tmp_node, ref pre_node)) = (tmp_node, pre_node) {
-        if tmp_node == pre_node {
+    if let (Some(tmp_node), Some(pre_node)) = (tmp_node, pre_node) {
+        if tmp_node as *const OsMemNodeHead == pre_node as *const OsMemNodeHead {
             println!("\n the broken node is the first node\n");
         }
-
-        if OS_MEM_NODE_GET_USED_FLAG((*tmp_node).sizeAndFlag) {
-            used_node = tmp_node as &OsMemUsedNodeHead;
+        let unsafe_cell_tmp_node = UnsafeCell::new(tmp_node);
+        let unsafe_cell_pre_node = UnsafeCell::new(pre_node);
+        if OS_MEM_NODE_GET_USED_FLAG((*tmp_node).sizeAndFlag) != 0{
+            
+            used_node = unsafe_cell_tmp_node.get() as *mut OsMemUsedNodeHead;
 #[cfg(feature = "LOSCFG_BASE_MEM_NODE_INTEGRITY_CHECK")]
 {
+        unsafe{
             println!(
                 "\n broken node head: {:?}  0x{:x}  0x{:x}, ",
                 (*used_node).header.ptr.prev,
                 (*used_node).header.magic,
                 (*used_node).header.sizeAndFlag
-            );
+            )};
 }
 #[cfg(not(feature = "LOSCFG_BASE_MEM_NODE_INTEGRITY_CHECK"))]
 {
+        unsafe{
             println!(
                 "\n broken node head: {:?}  0x{:x}, ",
                 (*used_node).header.ptr.prev,
                 (*used_node).header.sizeAndFlag
-            );
+            )};
 }
         } else {
-            free_node = tmp_node as &OsMemFreeNodeHead;
+            free_node = unsafe_cell_tmp_node.get() as *mut OsMemFreeNodeHead;
 #[cfg(feature = "LOSCFG_BASE_MEM_NODE_INTEGRITY_CHECK")]
 {   
+        unsafe{
             println!(
                 "\n broken node head: {:?}  {:?}  {:?}  0x{:x}  0x{:x}, ",
                 (*free_node).header.ptr.prev,
@@ -2203,42 +2365,47 @@ fn OsMemNodeInfo(tmp_node: Option<&OsMemNodeHead>, pre_node: Option<&OsMemNodeHe
                 (*free_node).prev,
                 (*free_node).header.magic,
                 (*free_node).header.sizeAndFlag
-            );
+            )};
 }
 #[cfg(not(feature = "LOSCFG_BASE_MEM_NODE_INTEGRITY_CHECK"))]
 {
+        unsafe{
             println!(
                 "\n broken node head: {:?}  {:?}  {:?}  0x{:x}, ",
                 (*free_node).header.ptr.prev,
                 (*free_node).next,
                 (*free_node).prev,
                 (*free_node).header.sizeAndFlag
-            );
+            )};
 }
 
-        if OS_MEM_NODE_GET_USED_FLAG((*pre_node).sizeAndFlag) {
-            used_node = pre_node &OsMemUsedNodeHead;
+        if OS_MEM_NODE_GET_USED_FLAG((*pre_node).sizeAndFlag) != 0 {
+            used_node = unsafe_cell_pre_node.get() as *mut OsMemUsedNodeHead;
 #[cfg(feature = "LOSCFG_BASE_MEM_NODE_INTEGRITY_CHECK")]
 {
+        unsafe{
             println!(
                 "prev node head: {:?}  0x{:x}  0x{:x}\n ",
                 (*used_node).header.ptr.prev,
                 (*used_node).header.magic,
                 (*used_node).header.sizeAndFlag
-            );
+            )};
 }
 #[cfg(not(feature = "LOSCFG_BASE_MEM_NODE_INTEGRITY_CHECK"))]
-{
+{   
+        unsafe{
             println!(
                 "prev node head: {:?}  0x{:x}\n ",
                 (*used_node).header.ptr.prev,
                 (*used_node).header.sizeAndFlag
-            );
+            )};
 }
         } else {
-            free_node = pre_node as &OsMemFreeNodeHead;
+
+            free_node = unsafe_cell_pre_node.get() as *mut OsMemFreeNodeHead;
 #[cfg(feature = "LOSCFG_BASE_MEM_NODE_INTEGRITY_CHECK")]
 {   
+        unsafe{
             println!(
                 "prev node head: {:?}  {:?}  {:?}  0x{:x}  0x{:x}, ",
                 (*free_node).header.ptr.prev,
@@ -2246,23 +2413,24 @@ fn OsMemNodeInfo(tmp_node: Option<&OsMemNodeHead>, pre_node: Option<&OsMemNodeHe
                 (*free_node).prev,
                 (*free_node).header.magic,
                 (*free_node).header.sizeAndFlag
-            );
+            )};
 }
 #[cfg(not(feature = "LOSCFG_BASE_MEM_NODE_INTEGRITY_CHECK"))]
 {
+            unsafe{
             println!(
                 "prev node head: {:?}  {:?}  {:?}  0x{:x}, ",
                 (*free_node).header.ptr.prev,
                 (*free_node).next,
                 (*free_node).prev,
                 (*free_node).header.sizeAndFlag
-            );
+            )};
 }
         }
 
-#[cfg(LOSCFG_MEM_LEAKCHECK = 1)]
+#[cfg(feature = "LOSCFG_MEM_LEAKCHECK")]
 {
-        OsMemNodeBacktraceInfo(tmp_node, pre_node);
+        unsafe{OsMemNodeBacktraceInfo(&mut*(unsafe_cell_tmp_node.get() as *mut OsMemNodeHead), &mut*(unsafe_cell_pre_node.get() as *mut OsMemNodeHead))};
 }
 }
     }
@@ -2319,6 +2487,7 @@ fn OsMemCheckInfoRecord(err_node: Option<&OsMemNodeHead>, pre_node: Option<&OsMe
     
 }
 
+// TOBECHECK
 fn OsMemIntegrityCheckError(
     pool: Option<&mut OsMemPoolHead>,
     tmp_node: Option<&OsMemNodeHead>,
@@ -2335,7 +2504,7 @@ fn OsMemIntegrityCheckError(
     #[cfg(any(feature = "LOSCFG_MEM_FREE_BY_TASKID", feature = "LOSCFG_TASK_MEM_USED"))]
     {
         let mut task_cb: *mut LosTaskCB = null_mut();
-        if OS_MEM_NODE_GET_USED_FLAG((*pre_node).sizeAndFlag) {
+        if OS_MEM_NODE_GET_USED_FLAG((*pre_node).sizeAndFlag) != 0{
             let used_node = pre_node as &OsMemUsedNodeHead;
             let task_id = (*used_node).header.taskID;
             if task_id >= LOSCFG_BASE_CORE_TSK_LIMIT/*在los_config_h.rs里定义*/ {
@@ -2379,15 +2548,20 @@ fn OsMemIntegrityCheckError(
 }
 
 #[cfg(feature = "LOSCFG_BASE_MEM_NODE_INTEGRITY_CHECK")]
-fn OsMemAllocCheck(pool: &mut OsMemPoolHead, int_save: u32) -> u32 {
-    let mut tmp_node: &OsMemNodeHead = null_mut();
-    let mut pre_node: &OsMemNodeHead = null_mut();
+fn OsMemAllocCheck(pool: Option<&mut OsMemPoolHead>, mut int_save: u32) -> u32 {
+    if let Some(pool) = pool {
+        let mut tmp_node: *mut OsMemNodeHead = null_mut();
+        let mut pre_node: *mut OsMemNodeHead = null_mut();
 
-    if OsMemIntegrityCheck(pool, &mut tmp_node, &mut pre_node) {
-        OsMemIntegrityCheckError(pool, tmp_node, pre_node, int_save);
-        return LOS_NOK;
+        if OsMemIntegrityCheck(Some(pool), Some(&mut tmp_node), Some(&mut pre_node)) != 0{
+            OsMemIntegrityCheckError(Some(pool), Some(&*tmp_node), Some(&*pre_node), &mut int_save);
+            return LOS_NOK;
+        }
+        LOS_OK
+    } else {
+        LOS_NOK
     }
-    LOS_OK
+    
 }
 
 
@@ -2414,395 +2588,414 @@ fn LOS_MemIntegrityCheck(pool: Option<&mut c_void>) -> u32 {
 
 
 #[inline]
-fn OsMemInfoGet(node: &mut OsMemNodeHead, pool_status: &mut LOS_MEM_POOL_STATUS) {
-    let mut total_used_size = 0;
-    let mut total_free_size = 0;
-    let mut used_node_num = 0;
-    let mut free_node_num = 0;
-    let mut max_free_size = 0;
-    let mut size: u32 = 0;
+fn OsMemInfoGet(node: Option<&mut OsMemNodeHead>, pool_status: Option<&mut LOS_MEM_POOL_STATUS>) {
+    if let (Some(node), Some(pool_status)) = (node, pool_status) {
+        let mut total_used_size = 0;
+        let mut total_free_size = 0;
+        let mut used_node_num = 0;
+        let mut free_node_num = 0;
+        let mut max_free_size = 0;
+        let mut size: u32 = 0;
 
-    if OS_MEM_NODE_GET_USED_FLAG((*node).sizeAndFlag) != 0 {
-        size = OS_MEM_NODE_GET_SIZE((*node).sizeAndFlag);
-        free_node_num += 1;
-        total_free_size += size;
-        if max_free_size < size {
-            max_free_size = size;
-        }
-    } else {
-        if OS_MEM_IS_GAP_NODE(Some(node)) {
-            size = OS_MEM_NODE_HEAD_SIZE as u32;
-        } else {
+        if OS_MEM_NODE_GET_USED_FLAG((*node).sizeAndFlag) == 0 {
             size = OS_MEM_NODE_GET_SIZE((*node).sizeAndFlag);
+            free_node_num += 1;
+            total_free_size += size;
+            if max_free_size < size {
+                max_free_size = size;
+            }
+        } else {
+            if OS_MEM_IS_GAP_NODE(Some(node)) {
+                size = OS_MEM_NODE_HEAD_SIZE as u32;
+            } else {
+                size = OS_MEM_NODE_GET_SIZE((*node).sizeAndFlag);
+            }
+            used_node_num += 1;
+            total_used_size += size;
         }
-        used_node_num += 1;
-        total_used_size += size;
-    }
 
-    (*pool_status).totalUsedSize += total_used_size;
-    (*pool_status).totalFreeSize += total_free_size;
-    (*pool_status).maxFreeNodeSize = (*pool_status).maxFreeNodeSize.max(max_free_size);
-    (*pool_status).usedNodeNum += used_node_num;
-    (*pool_status).freeNodeNum += free_node_num;
+        (*pool_status).totalUsedSize += total_used_size;
+        (*pool_status).totalFreeSize += total_free_size;
+        (*pool_status).maxFreeNodeSize = (*pool_status).maxFreeNodeSize.max(max_free_size);
+        (*pool_status).usedNodeNum += used_node_num;
+        (*pool_status).freeNodeNum += free_node_num;
+    }
 }
 
-// fn OsMemNodeInfoGetHandle(cur_node: &mut OsMemNodeHead, arg: &mut c_void) {
-//     let pool_status = arg as &mut LOS_MEM_POOL_STATUS;
-//     OsMemInfoGet(cur_node, pool_status);
-// }
+fn OsMemNodeInfoGetHandle(cur_node: Option<&mut OsMemNodeHead>, arg: Option<&mut c_void>) {
+    if let (Some(cur_node), Some(arg)) = (cur_node, arg) {
+        let pool_status = arg as *mut c_void as *mut LOS_MEM_POOL_STATUS;
+        unsafe{OsMemInfoGet(Some(cur_node), Some(&mut*pool_status))};
+    }
+}
 
-// pub fn LOS_MemInfoGet(pool: &mut c_void, pool_status: &mut LOS_MEM_POOL_STATUS) -> u32 {
-//     let pool_info = pool as &mut OsMemPoolHead;
-//     let mut int_save = 0;
+pub fn LOS_MemInfoGet(pool: Option<&mut c_void>, pool_status: Option<&mut LOS_MEM_POOL_STATUS>) -> u32 {
+    if pool_status.is_none() {
+        println!("can't use NULL addr to save info");
+        return LOS_NOK;
+    }
+    if pool.is_none() {
+        println!("wrong mem pool addr: {}, line:{}", pool.unwrap() as *mut c_void as usize, line!());
+        return LOS_NOK;
+    }
+    if let (Some(pool), Some(pool_status)) = (pool, pool_status) {
+        let pool_info = pool as *mut c_void as *mut OsMemPoolHead;
+        let mut int_save = 0;
+        if unsafe{(*pool_info).info.pool != pool} {
+            println!("wrong mem pool addr: {}, line:{}", pool_info as usize, line!());
+            return LOS_NOK;
+        }
 
-//     if pool_status.is_null() {
-//         println!("can't use NULL addr to save info");
-//         return LOS_NOK;
-//     }
+        let _ = memset_s(pool_status as *mut LOS_MEM_POOL_STATUS as *mut c_void, std::mem::size_of::<LOS_MEM_POOL_STATUS>(), 0, std::mem::size_of::<LOS_MEM_POOL_STATUS>());
+        unsafe{OsAllMemNodeDoHandle(Some(pool), OsMemNodeInfoGetHandle, Some(&mut*(pool_status as *mut LOS_MEM_POOL_STATUS as *mut c_void)))};
 
-//     if pool.is_null() || (*pool_info).info.pool != pool {
-//         println!("wrong mem pool addr: {:p}, line:{}", pool_info as usize, line!());
-//         return LOS_NOK;
-//     }
-
-//     memset_s(&mut *poolStatus, std::mem::size_of::<LOS_MEM_POOL_STATUS>, 0, std::mem::size_of::<LOS_MEM_POOL_STATUS>)
-
-//     OsAllMemNodeDoHandle(pool, os_mem_node_info_get_handle, pool_status as *mut c_void);
-
-//     MEM_LOCK(pool_info, int_save);
-//     #![cfg(feature = "LOSCFG_MEM_WATERLINE")]
-//     (*pool_status).usage_water_line = (*pool_info).info.water_line;
-//     MEM_UNLOCK(pool_info, int_save);
-
-//     LOS_OK
-// }
-
-// fn OsMemInfoPrint(pool: &mut c_void) {
-//     #[cfg(feature = "LOSCFG_KERNEL_PRINTF")]
-//     {
-//         let pool_info = pool as &mut OsMemPoolHead;
-//         let mut status: LOS_MEM_POOL_STATUS = Default::default();
-
-//         if LOS_MemInfoGet(pool, &mut status) == LOS_NOK {
-//             return;
-//         }
-
-//         #[cfg(feature = "LOSCFG_MEM_WATERLINE")]
-//         {
-//             println!("pool addr          pool size    used size     free size    max free node size   used node num     free node num      UsageWaterLine");
-//             println!("---------------    --------     -------       --------     --------------       -------------      ------------      ------------");
-//             println!("{:-16p}   0x{:08x}   0x{:08x}    0x{:08x}   0x{:016x}   0x{:013x}    0x{:013x}    0x{:013x}",
-//                      (*pool_info).info.pool, LOS_MemPoolSizeGet(pool), (*status).totalUsedSize,
-//                      (*status).totalFreeSize, (*status).maxFreeNodeSize, (*status).usedNodeNum,
-//                      (*status).freeNodeNum, (*status).usageWaterLine);
-//         }
-//         #[cfg(not(feature = "LOSCFG_MEM_WATERLINE"))]
-//         {
-//             println!("pool addr          pool size    used size     free size    max free node size   used node num     free node num");
-//             println!("---------------    --------     -------       --------     --------------       -------------      ------------");
-//             println!("{:-16p}   0x{:08x}   0x{:08x}    0x{:08x}   0x{:016x}   0x{:013x}    0x{:013x}",
-//                      (*pool_info).info.pool, LOS_MemPoolSizeGet(pool), (*status).totalUsedSize,
-//                      (*status).totalFreeSize, (*status).maxFreeNodeSize, (*status).usedNodeNum,
-//                      (*status).freeNodeNum);
-//         }
-//     }
-// }
-
-// fn LOS_MemFreeNodeShow(pool: &mut c_void) -> u32 {
-//     #[cfg(feature = "LOSCFG_KERNEL_PRINTF")]
-//     {
-//         let pool_info = pool as &mut OsMemPoolHead;
-
-//         if pool_info.is_null() || (pool as usize) != (*pool_info).info.pool as usize {
-//             println!("wrong mem pool addr: {:p}, line: {}", pool_info as u8, line!());
-//             return LOS_NOK;
-//         }
-
-//         let mut node: &mut OsMemFreeNodeHead = null_mut();
-//         let mut count_num: [u32; OS_MEM_FREE_LIST_COUNT/* 在los_memory_h.rs里定义 */] = [0; OS_MEM_FREE_LIST_COUNT/* 在los_memory_h.rs里定义 */];
-//         let mut index: u32;
-//         let mut int_save = 0;
-
-//         MEM_LOCK(pool_info, int_save);
-//         for index in 0..OS_MEM_FREE_LIST_COUNT/* 在los_memory_h.rs里定义 */ {
-//             node = (*pool_info).free_list[index];
-//             while !node.is_null() {
-//                 node = (*node).next;
-//                 count_num[index] += 1;
-//             }
-//         }
-//         MEM_UNLOCK(pool_info, int_save);
-
-//         println!("\n   ************************ left free node number**********************");
-//         for index in 0..OS_MEM_FREE_LIST_COUNT/* 在los_memory_h.rs里定义 */ {
-//             if count_num[index] == 0 {
-//                 continue;
-//             }
-
-//             print!("free index: {:03}, ", index);
-//             if index < OS_MEM_SMALL_BUCKET_COUNT/*在los_memory_h.rs里定义*/ {
-//                 println!("size: [0x{:x}], num: {}", (index + 1) << 2, count_num[index]);
-//             } else {
-//                 let val = 1 << (((index - OS_MEM_SMALL_BUCKET_COUNT/*在los_memory_h.rs里定义*/) >> OS_MEM_SLI/*在los_memory_h.rs里定义*/) + OS_MEM_LARGE_START_BUCKET/*在los_memory_h.rs里定义*/);
-//                 let offset = val >> OS_MEM_SLI/*在los_memory_h.rs里定义*/;
-//                 println!("size: [0x{:x}, 0x{:x}], num: {}",
-//                         (offset * ((index - OS_MEM_SMALL_BUCKET_COUNT/*在los_memory_h.rs里定义*/) % (1 << OS_MEM_SLI/*在los_memory_h.rs里定义*/))) + val,
-//                         ((offset * (((index - OS_MEM_SMALL_BUCKET_COUNT/*在los_memory_h.rs里定义*/) % (1 << OS_MEM_SLI/*在los_memory_h.rs里定义*/)) + 1)) + val - 1),
-//                         count_num[index]);
-//             }
-//         }
-//         println!("\n   ********************************************************************\n");
-
-//     }
-//     LOS_OK
-// }
-
-// pub fn LOS_MemUnlockEnable(pool: &mut c_void) {
-//     if pool.is_null() {
-//         return;
-//     }
-//     (*(pool as &mut OsMemPoolHead)).info.attr |= OS_MEM_POOL_UNLOCK_ENABLE;
-// }
-
-// #[cfg(feature = "LOSCFG_MEM_MUL_REGIONS")]
-// {
-//     #[inline]
-//     fn OsMemMulRegionsParamCheck(pool: &mut c_void, mem_regions: &LosMemRegion, mem_region_count: u32) -> u32 {
-//         let mut last_start_address: &mut c_void = null_mut();
-//         let mut cur_start_address: &mut c_void;
-//         let mut last_length: u32 = 0;
-//         let mut cur_length: u32;
-//         let mut region_count = 0;
-
-//         if !pool.is_null() && (*(pool as &mut OsMemPoolHead)).info.pool != pool {
-//             println!("wrong mem pool addr: {:p}, func: {}, line: {}", pool, function_name!(), line!());
-//             return LOS_NOK;
-//         }
-
-//         if !pool.is_null() {
-//             last_start_address = pool;
-//             last_length = (*(pool as &mut OsMemPoolHead)).info.total_size;
-//         }
-
-//         while region_count < mem_region_count {
-//             let cur_start_address = (*mem_region).start_address;
-//             let cur_length = (*mem_region).length;
+        MEM_LOCK(Some(unsafe{&mut*pool_info}), &mut int_save);
+        #[cfg(feature = "LOSCFG_MEM_WATERLINE")]{
+            unsafe{(*pool_status).usageWaterLine = (*pool_info).info.waterLine};
+        }
         
-//             if cur_start_address.is_null() || cur_length == 0 {
-//                 println!("Memory address or length configured wrongly: address: {:p}, the length: 0x{:x}", cur_start_address as usize, cur_length);
-//                 return LOS_NOK;
-//             }
-        
-//             if (cur_start_address as usize) & (OS_MEM_ALIGN_SIZE - 1) != 0 || (cur_length & (OS_MEM_ALIGN_SIZE - 1)) != 0 {
-//                 println!("Memory address or length configured not aligned: address: {:p}, the length: 0x{:x}, align size: {}", cur_start_address as usize, cur_length, OS_MEM_ALIGN_SIZE);
-//                 return LOS_NOK;
-//             }
-        
-//             if !last_start_address.is_null() && (last_start_address as usize + last_length) >= cur_start_address as usize {
-//                 println!("Memory regions overlapped, the last start address: {:p}, the length: 0x{:x}, the current start address: {:p}", last_start_address as usize, last_length, cur_start_address as usize);
-//                 return LOS_NOK;
-//             }
-        
-//             mem_region += 1;
-//             region_count += 1;
-//             last_start_address = cur_start_address;
-//             last_length = cur_length;
-//         }
-        
-//         LOS_OK
-//     }
+        MEM_UNLOCK(Some(unsafe{&mut*pool_info}), &mut int_save);
 
-//     #[inline]
-//     pub fn OsMemMulRegionsLink(poolHead: &mut OsMemPoolHead,lastStartAddress: &mut c_void, lastLength: u32,
-//         lastEndNode: &mut OsMemNodeHead, memRegion: &LosMemRegion)
-//     {
-//         let mut curLength: u32 = 0;
-//         let mut gapSize: u32 = 0;
-//         let mut curEndNode: &mut OsMemNodeHead = null_mut();
-//         let mut curFreeNode: &mut OsMemNodeHead = null_mut();
-//         let mut curStartAddress: *mut c_void = null_mut();
+        LOS_OK
+    } else {
+        LOS_NOK
+    }
+    
+}
 
-//         curStartAddress = (*memRegion).startAddress;
-//         curLength = (*memRegion).length;
-//     #[cfg(feature = "LOSCFG_KERNEL_LMS")]{  
-//         let mut resize: u32 = 0;
-//         if (!g_lms.isnull()) {   
-//             resize = (*g_lms).init(curStartAddress, curLength);
-//             curLength = (resize == 0) ? curLength : resize;
-//         }
-//     }
+fn OsMemInfoPrint(pool: Option<&mut c_void>) {
+    if let Some(pool) = pool {
+        #[cfg(feature = "LOSCFG_KERNEL_PRINTF")]
+        {
+            let pool_info = pool as *mut c_void as *mut OsMemPoolHead;
+            let status: *mut LOS_MEM_POOL_STATUS = null_mut();   // 源码LOS_MEM_POOL_STATUS status = {0};感觉写错了，应该是指针
 
-//         gapSize = (curStartAddress (as &u8)) - ((poolHead)(as &u8) + (*poolHead).info.totalSize);
-//         (*lastEndNode).sizeAndFlag = gapSize + OS_MEM_NODE_HEAD_SIZE;
-//         OS_MEM_SET_MAGIC(lastEndNode);
-//         OS_MEM_NODE_SET_USED_FLAG((*lastEndNode).sizeAndFlag);
+            if LOS_MemInfoGet(Some(&mut*pool), Some(unsafe{&mut*(status)})) == LOS_NOK {
+                return;
+            }
 
-//         OS_MEM_MARK_GAP_NODE(lastEndNode);
+            #[cfg(feature = "LOSCFG_MEM_WATERLINE")]
+            {
+                println!("pool addr          pool size    used size     free size    max free node size   used node num     free node num      UsageWaterLine");
+                println!("---------------    --------     -------       --------     --------------       -------------      ------------      ------------");
+                unsafe{println!("{:-16p}   0x{:08x}   0x{:08x}    0x{:08x}   0x{:016x}   0x{:013x}    0x{:013x}    0x{:013x}",
+                        (*pool_info).info.pool, LOS_MemPoolSizeGet(Some(pool)), (*status).totalUsedSize,
+                        (*status).totalFreeSize, (*status).maxFreeNodeSize, (*status).usedNodeNum,
+                        (*status).freeNodeNum, (*status).usageWaterLine)};
+            }
+            #[cfg(not(feature = "LOSCFG_MEM_WATERLINE"))]
+            {
+                println!("pool addr          pool size    used size     free size    max free node size   used node num     free node num");
+                println!("---------------    --------     -------       --------     --------------       -------------      ------------");
+                unsafe{println!("{:-16p}   0x{:08x}   0x{:08x}    0x{:08x}   0x{:016x}   0x{:013x}    0x{:013x}",
+                        (*pool_info).info.pool, LOS_MemPoolSizeGet(pool), (*status).totalUsedSize,
+                        (*status).totalFreeSize, (*status).maxFreeNodeSize, (*status).usedNodeNum,
+                        (*status).freeNodeNum)};
+            }
+        }
+    }
+    
+}
 
-//         (*poolHead).info.totalSize += (curLength + gapSize);
-//         (*poolHead).info.totalGapSize += gapSize;
+fn LOS_MemFreeNodeShow(pool: Option<&mut c_void>) -> u32 {
+    if let Some(pool) = pool {
+    #[cfg(feature = "LOSCFG_KERNEL_PRINTF")]
+        {
+            let pool_info = pool as *mut c_void as *mut OsMemPoolHead;
 
-//         curFreeNode = curStartAddress as &mut OsMemNodeHead;
-//         (*curFreeNode).sizeAndFlag = curLength - OS_MEM_NODE_HEAD_SIZE;
-//         (*curFreeNode).ptr.prev = lastEndNode;
-//         OS_MEM_SET_MAGIC(curFreeNode);
-//         OsMemFreeNodeAdd(poolHead, curFreeNode as &OsMemFreeNodeHead);
+            if pool_info.is_null() || (pool as *mut c_void as usize) != unsafe{(*pool_info).info.pool as usize} {
+                println!("wrong mem pool addr: {}, line: {}", pool_info as u8, line!());
+                return LOS_NOK;
+            }
 
-//         curEndNode = OS_MEM_END_NODE(curStartAddress, curLength);
-//         (*curEndNode).sizeAndFlag = 0;
-//         (*curEndNode).ptr.prev = curFreeNode;
-//         OS_MEM_SET_MAGIC(curEndNode);
-//         OS_MEM_NODE_SET_USED_FLAG((*curEndNode).sizeAndFlag);
+            let mut node: *mut OsMemFreeNodeHead = null_mut();
+            let mut count_num: [u32; OS_MEM_FREE_LIST_COUNT as usize/* 在los_memory_h.rs里定义 */] = [0; OS_MEM_FREE_LIST_COUNT as usize/* 在los_memory_h.rs里定义 */];
+            let mut index: u32;
+            let mut int_save = 0;
 
-//     #[cfg(feature = "LOSCFG_MEM_WATERLINE")]{
-//         (*poolHead).info.curUsedSize += OS_MEM_NODE_HEAD_SIZE;
-//         (*poolHead).info.waterLine = (*poolHead).info.curUsedSize;
-//     }
+            unsafe{MEM_LOCK(Some(&mut*pool_info), &mut int_save)};
+            for index in 0..OS_MEM_FREE_LIST_COUNT/* 在los_memory_h.rs里定义 */ {
+                node = unsafe{(*pool_info).freeList[index as usize]};
+                while !node.is_null() {
+                    node = unsafe{(*node).next};
+                    count_num[index as usize] += 1;
+                }
+            }
+            unsafe{MEM_UNLOCK(Some(&mut*pool_info), &mut int_save)};
 
-//     }
+            println!("\n   ************************ left free node number**********************");
+            for index in 0..OS_MEM_FREE_LIST_COUNT/* 在los_memory_h.rs里定义 */ {
+                if count_num[index as usize] == 0 {
+                    continue;
+                }
 
-//     pub fn LOS_MemRegionsAdd(pool: &mut OsMemPoolHead, memRegions: &LosMemRegion , memRegionCount: u32) -> u32
-//     {
-//         let mut ret: u32 = 0;
-//         let mut lastLength: u32 = 0;
-//         let mut curLength: u32 = 0;
-//         let mut regionCount: u32 = 0;
-//         let mut poolHead: &mut OsMemPoolHead = null_mut(); //之前这几个变量是指针
-//         let mut lastEndNode: &mut OsMemNodeHead = null_mut();
-//         let mut firstFreeNode: &mut OsMemNodeHead = null_mut();
-//         let memRegion: &LosMemRegion = null_mut();
-//         let mut lastStartAddress: &mut c_void = null_mut();
-//         let mut curStartAddress: &mut c_void = null_mut();
+                print!("free index: {:03}, ", index);
+                if index < OS_MEM_SMALL_BUCKET_COUNT/*在los_memory_h.rs里定义*/ {
+                    println!("size: [0x{:x}], num: {}", (index + 1) << 2, count_num[index as usize]);
+                } else {
+                    let val = 1 << (((index - OS_MEM_SMALL_BUCKET_COUNT/*在los_memory_h.rs里定义*/) >> OS_MEM_SLI/*在los_memory_h.rs里定义*/) + OS_MEM_LARGE_START_BUCKET/*在los_memory_h.rs里定义*/);
+                    let offset = val >> OS_MEM_SLI/*在los_memory_h.rs里定义*/;
+                    println!("size: [0x{:x}, 0x{:x}], num: {}",
+                            (offset * ((index - OS_MEM_SMALL_BUCKET_COUNT/*在los_memory_h.rs里定义*/) % (1 << OS_MEM_SLI/*在los_memory_h.rs里定义*/))) + val,
+                            ((offset * (((index - OS_MEM_SMALL_BUCKET_COUNT/*在los_memory_h.rs里定义*/) % (1 << OS_MEM_SLI/*在los_memory_h.rs里定义*/)) + 1)) + val - 1),
+                            count_num[index as usize]);
+                }
+            }
+            println!("\n   ********************************************************************\n");
+
+        }
+        LOS_OK
+    } else {
+        LOS_NOK
+    }
+}
+
+pub fn LOS_MemUnlockEnable(pool: Option<&mut c_void>) {
+    if let Some(pool) = pool {
+        unsafe{(*(pool as *mut c_void as *mut OsMemPoolHead)).info.attr |= OS_MEM_POOL_UNLOCK_ENABLE}; 
+    }
+}
+
+#[cfg(feature = "LOSCFG_MEM_MUL_REGIONS")]
+#[inline]
+fn OsMemMulRegionsParamCheck(pool: Option<&mut c_void>, mem_regions: &LosMemRegion, mem_region_count: u32) -> u32 {
+    let mut last_start_address: &mut c_void = null_mut();
+    let mut cur_start_address: &mut c_void;
+    let mut last_length: u32 = 0;
+    let mut cur_length: u32;
+    let mut region_count = 0;
+
+    if !pool.is_null() && (*(pool as &mut OsMemPoolHead)).info.pool != pool {
+        println!("wrong mem pool addr: {:p}, func: {}, line: {}", pool, function_name!(), line!());
+        return LOS_NOK;
+    }
+
+    if !pool.is_null() {
+        last_start_address = pool;
+        last_length = (*(pool as &mut OsMemPoolHead)).info.total_size;
+    }
+
+    while region_count < mem_region_count {
+        let cur_start_address = (*mem_region).start_address;
+        let cur_length = (*mem_region).length;
+    
+        if cur_start_address.is_null() || cur_length == 0 {
+            println!("Memory address or length configured wrongly: address: {:p}, the length: 0x{:x}", cur_start_address as usize, cur_length);
+            return LOS_NOK;
+        }
+    
+        if (cur_start_address as usize) & (OS_MEM_ALIGN_SIZE - 1) != 0 || (cur_length & (OS_MEM_ALIGN_SIZE - 1)) != 0 {
+            println!("Memory address or length configured not aligned: address: {:p}, the length: 0x{:x}, align size: {}", cur_start_address as usize, cur_length, OS_MEM_ALIGN_SIZE);
+            return LOS_NOK;
+        }
+    
+        if !last_start_address.is_null() && (last_start_address as usize + last_length) >= cur_start_address as usize {
+            println!("Memory regions overlapped, the last start address: {:p}, the length: 0x{:x}, the current start address: {:p}", last_start_address as usize, last_length, cur_start_address as usize);
+            return LOS_NOK;
+        }
+    
+        mem_region += 1;
+        region_count += 1;
+        last_start_address = cur_start_address;
+        last_length = cur_length;
+    }
+    
+    LOS_OK
+}
+
+#[cfg(feature = "LOSCFG_MEM_MUL_REGIONS")]
+#[inline]
+pub fn OsMemMulRegionsLink(poolHead: &mut OsMemPoolHead,lastStartAddress: &mut c_void, lastLength: u32,
+    lastEndNode: &mut OsMemNodeHead, memRegion: &LosMemRegion)
+{
+    let mut curLength: u32 = 0;
+    let mut gapSize: u32 = 0;
+    let mut curEndNode: &mut OsMemNodeHead = null_mut();
+    let mut curFreeNode: &mut OsMemNodeHead = null_mut();
+    let mut curStartAddress: *mut c_void = null_mut();
+
+    curStartAddress = (*memRegion).startAddress;
+    curLength = (*memRegion).length;
+#[cfg(feature = "LOSCFG_KERNEL_LMS")]{  
+    let mut resize: u32 = 0;
+    if (!g_lms.is_null()) {   
+        resize = (*g_lms).init(curStartAddress, curLength);
+        if resize != 0 {
+            curLength = resize;
+        }
+    }
+}
+
+    gapSize = (curStartAddress as *mut u8) - ((poolHead as *mut u8) + (*poolHead).info.totalSize);
+    (*lastEndNode).sizeAndFlag = gapSize + OS_MEM_NODE_HEAD_SIZE;
+    OS_MEM_SET_MAGIC(lastEndNode);
+    OS_MEM_NODE_SET_USED_FLAG((*lastEndNode).sizeAndFlag);
+
+    OS_MEM_MARK_GAP_NODE(lastEndNode);
+
+    (*poolHead).info.totalSize += (curLength + gapSize);
+    (*poolHead).info.totalGapSize += gapSize;
+
+    curFreeNode = curStartAddress as &mut OsMemNodeHead;
+    (*curFreeNode).sizeAndFlag = curLength - OS_MEM_NODE_HEAD_SIZE;
+    (*curFreeNode).ptr.prev = lastEndNode;
+    OS_MEM_SET_MAGIC(curFreeNode);
+    OsMemFreeNodeAdd(poolHead, curFreeNode as &OsMemFreeNodeHead);
+
+    curEndNode = OS_MEM_END_NODE(curStartAddress, curLength);
+    (*curEndNode).sizeAndFlag = 0;
+    (*curEndNode).ptr.prev = curFreeNode;
+    OS_MEM_SET_MAGIC(curEndNode);
+    OS_MEM_NODE_SET_USED_FLAG((*curEndNode).sizeAndFlag);
+
+#[cfg(feature = "LOSCFG_MEM_WATERLINE")]{
+    (*poolHead).info.curUsedSize += OS_MEM_NODE_HEAD_SIZE;
+    (*poolHead).info.waterLine = (*poolHead).info.curUsedSize;
+}
+
+}
+
+#[cfg(feature = "LOSCFG_MEM_MUL_REGIONS")]
+pub fn LOS_MemRegionsAdd(pool: &mut OsMemPoolHead, memRegions: &LosMemRegion , memRegionCount: u32) -> u32
+{
+    let mut ret: u32 = 0;
+    let mut lastLength: u32 = 0;
+    let mut curLength: u32 = 0;
+    let mut regionCount: u32 = 0;
+    let mut poolHead: &mut OsMemPoolHead = null_mut(); //之前这几个变量是指针
+    let mut lastEndNode: &mut OsMemNodeHead = null_mut();
+    let mut firstFreeNode: &mut OsMemNodeHead = null_mut();
+    let memRegion: &LosMemRegion = null_mut();
+    let mut lastStartAddress: &mut c_void = null_mut();
+    let mut curStartAddress: &mut c_void = null_mut();
 
 
-//         ret = OsMemMulRegionsParamCheck(pool, memRegions, memRegionCount);
-//         if (ret != LOS_OK) {
-//             return ret;
-//         }
+    ret = OsMemMulRegionsParamCheck(pool, memRegions, memRegionCount);
+    if (ret != LOS_OK) {
+        return ret;
+    }
 
-//         memRegion = memRegions;
-//         regionCount = 0;
-//         if (!pool.isnull()) { 
-//             poolHead = pool as &mut OsMemPoolHead;
-//             lastStartAddress = pool;
-//             lastLength = (*poolHead).info.totalSize;
-//         } else { 
-//             lastLength = (*memRegion).length;
-//             poolHead = ((*memRegion).startAddress) as &mut OsMemPoolHead;
-//             ret = LOS_MemInit(lastStartAddress, lastLength);
-//             if (ret != LOS_OK) {
-//                 return ret;
-//             }
-//             memRegion++;
-//             regionCount++;
-//         }
+    memRegion = memRegions;
+    regionCount = 0;
+    if (!pool.is_null()) { 
+        poolHead = pool as &mut OsMemPoolHead;
+        lastStartAddress = pool;
+        lastLength = (*poolHead).info.totalSize;
+    } else { 
+        lastLength = (*memRegion).length;
+        poolHead = ((*memRegion).startAddress) as &mut OsMemPoolHead;
+        ret = LOS_MemInit(lastStartAddress, lastLength);
+        if (ret != LOS_OK) {
+            return ret;
+        }
+        memRegion += 1;
+        regionCount += 1;
+    }
 
-//         firstFreeNode = OS_MEM_FIRST_NODE(lastStartAddress); //这里是裸指针
-//         lastEndNode = OS_MEM_END_NODE(lastStartAddress, (*poolHead).info.totalSize);
-//         while (regionCount < memRegionCount) {
-//             curStartAddress = (*memRegion).startAddress;
-//             curLength = (*memRegion).length;
+    firstFreeNode = OS_MEM_FIRST_NODE(lastStartAddress); //这里是裸指针
+    lastEndNode = OS_MEM_END_NODE(lastStartAddress, (*poolHead).info.totalSize);
+    while (regionCount < memRegionCount) {
+        curStartAddress = (*memRegion).startAddress;
+        curLength = (*memRegion).length;
 
-//             OsMemMulRegionsLink(poolHead, lastStartAddress, lastLength, lastEndNode, memRegion);
-//             lastStartAddress = curStartAddress;
-//             lastLength = curLength;
-//             lastEndNode = OS_MEM_END_NODE(poolHead, (*poolHead).info.totalSize);
-//             memRegion++;
-//             regionCount++;
-//         }
+        OsMemMulRegionsLink(poolHead, lastStartAddress, lastLength, lastEndNode, memRegion);
+        lastStartAddress = curStartAddress;
+        lastLength = curLength;
+        lastEndNode = OS_MEM_END_NODE(poolHead, (*poolHead).info.totalSize);
+        memRegion += 1;
+        regionCount += 1;
+    }
 
-//         (*firstFreeNode).ptr.prev = lastEndNode;
-//         return ret;
-//     }
-// }
+    (*firstFreeNode).ptr.prev = lastEndNode;
+    return ret;
+}
 
+pub fn OsMemSystemInit() -> u32 {
+    let mut ret: u32 = 0;
+#[cfg(not(feature = "LOSCFG_SYS_EXTERNAL_HEAP"))]
+{
+    unsafe{m_aucSysMem0 = g_memStart.as_mut_ptr()};
+}
+#[cfg(feature = "LOSCFG_SYS_EXTERNAL_HEAP")] 
+{
+    unsafe{m_aucSysMem0 = LOSCFG_SYS_HEAP_ADDR};
+} 
+    ret = LOS_MemInit(Some(unsafe{&mut*(m_aucSysMem0 as *mut c_void)}), LOSCFG_SYS_HEAP_SIZE/* 在los_memory_h.rs里定义 */);
+    unsafe{println!("LiteOS heap memory address: {:p}, size: 0x{:x}", m_aucSysMem0, LOSCFG_SYS_HEAP_SIZE/* 在los_memory_h.rs里定义 */ as usize)};
+    return ret;
+}
 
-// pub fn OsMemSystemInit -> u32 {
-//     let ret: u32 = 0;
-// #[cfg(LOSCFG_SYS_EXTERNAL_HEAP == 0)]
-// {
-//     m_aucSysMem0 = g_memStart;
-// }
-// #[cfg(not(LOSCFG_SYS_EXTERNAL_HEAP == 0))] 
-// {
-//     _aucSysMem0 = LOSCFG_SYS_HEAP_ADDR;
-// } 
-//     ret = LOS_MemInit(m_aucSysMem0, LOSCFG_SYS_HEAP_SIZE/* 在los_memory_h.rs里定义 */);
-//     println!("LiteOS heap memory address: {:p}, size: 0x{:x}", m_aucSysMem0, LOSCFG_SYS_HEAP_SIZE/* 在los_memory_h.rs里定义 */ as usize);
-//     return ret;
-// }
+#[cfg(feature = "LOSCFG_PLATFORM_EXC")]
+fn OsMemExcInfoGetSub(pool: &mut OsMemPoolHead, mem_exc_info: &mut MemInfoCB) {
+    let mut tmp_node: &mut OsMemNodeHead = null_mut();
+    let mut task_id: u32 = OS_TASK_ERRORID;
+    let mut int_save: u32 = 0;
 
-// #[cfg(LOSCFG_PLATFORM_EXC = 1)]
-// {
-//     fn OsMemExcInfoGetSub(pool: &mut OsMemPoolHead, mem_exc_info: &mut MemInfoCB) {
-//         let mut tmp_node: &mut OsMemNodeHead = null_mut();
-//         let mut task_id: u32 = OS_TASK_ERRORID;
-//         let mut int_save: u32 = 0;
+    memset_s(&mut *mem_exc_info, std::mem::size_of::<MemInfoCB>, 0, std::mem::size_of::<MemInfoCB>);
+    MEM_LOCK(pool, int_save);
+    (*mem_exc_info).r#type = MEM_MANG_MEMORY;
+    (*mem_exc_info).startAddr = (*pool).info.pool as UINTPTR;
+    (*mem_exc_info).size = (*pool).info.totalSize;
+    (*mem_exc_info).free = (*pool).info.totalSize - (*pool).info.curUsedSize;
 
-//         memset_s(&mut *mem_exc_info, std::mem::size_of::<MemInfoCB>, 0, std::mem::size_of::<MemInfoCB>);
-//         MEM_LOCK(pool, int_save);
-//         (*mem_exc_info).type = MEM_MANG_MEMORY;
-//         (*mem_exc_info).startAddr = (*pool).info.pool as UINTPTR;
-//         (*mem_exc_info).size = (*pool).info.totalSize;
-//         (*mem_exc_info).free = (*pool).info.totalSize - (*pool).info.curUsedSize;
+    let first_node: &OsMemNodeHead = OS_MEM_FIRST_NODE(pool);
+    let end_node: &mut OsMemNodeHead = OS_MEM_END_NODE(pool, (*pool).info.totalSize);
 
-//         let first_node: &OsMemNodeHead = OS_MEM_FIRST_NODE(pool);
-//         let end_node: &mut OsMemNodeHead = OS_MEM_END_NODE(pool, (*pool).info.totalSize);
+    tmp_node = first_node;
+    while tmp_node < end_node {
+        (*mem_exc_info).blockSize += 1;
+        if OS_MEM_NODE_GET_USED_FLAG((*tmp_node).sizeAndFlag) != 0 {
+            if !OS_MEM_MAGIC_VALID(tmp_node) ||
+                OsMemAddrValidCheck(pool, (*tmp_node).ptr.prev) == 0 {
+#[cfg(any(feature = "LOSCFG_MEM_FREE_BY_TASKID", feature = "LOSCFG_TASK_MEM_USED"))]
+{
+                task_id = (*(tmp_node as &mut OsMemUsedNodeHead)).header.taskID;
+}
+                (*mem_exc_info).errorAddr = ((*tmp_node as *const u8).offset(OS_MEM_NODE_HEAD_SIZE as isize)) as usize;
+                (*mem_exc_info).errorLen = OS_MEM_NODE_GET_SIZE((*tmp_node).sizeAndFlag) - OS_MEM_NODE_HEAD_SIZE;
+                (*mem_exc_info).errorOwner = task_id;
+                MEM_UNLOCK(pool, int_save);
+                return;
+            }
+        } else {
+            let free_node = tmp_node as *mut OsMemFreeNodeHead;
+            if OsMemAddrValidCheckPrint(pool, free_node) != 0 {
+                (*mem_exc_info).errorAddr = ((*tmp_node as *const u8).offset(OS_MEM_NODE_HEAD_SIZE as isize)) as usize;
+                (*mem_exc_info).errorLen = OS_MEM_NODE_GET_SIZE((*tmp_node).sizeAndFlag) - OS_MEM_NODE_HEAD_SIZE;
+                (*mem_exc_info).errorOwner = task_id;
+                MEM_UNLOCK(pool, int_save);
+                return;
+            }
+        }
+        tmp_node = OS_MEM_NEXT_NODE(tmp_node);
+    }
+    
+    MEM_UNLOCK(pool, int_save);
+    return;
+}
 
-//         tmp_node = first_node;
-//         while tmp_node < end_node {
-//             (*mem_exc_info).blockSize += 1;
-//             if OS_MEM_NODE_GET_USED_FLAG((*tmp_node).sizeAndFlag) != 0 {
-//                 if !OS_MEM_MAGIC_VALID(tmp_node) ||
-//                     OsMemAddrValidCheck(pool, (*tmp_node).ptr.prev) == 0 {
-//     #[cfg(any(feature = "LOSCFG_MEM_FREE_BY_TASKID", feature = "LOSCFG_TASK_MEM_USED"))]
-//     {
-//                     task_id = (*(tmp_node as &mut OsMemUsedNodeHead)).header.taskID;
-//     }
-//                     (*mem_exc_info).errorAddr = ((*tmp_node as *const u8).offset(OS_MEM_NODE_HEAD_SIZE as isize)) as usize;
-//                     (*mem_exc_info).errorLen = OS_MEM_NODE_GET_SIZE((*tmp_node).sizeAndFlag) - OS_MEM_NODE_HEAD_SIZE;
-//                     (*mem_exc_info).errorOwner = task_id;
-//                     MEM_UNLOCK(pool, int_save);
-//                     return;
-//                 }
-//             } else {
-//                 let free_node = tmp_node as *mut OsMemFreeNodeHead;
-//                 if OsMemAddrValidCheckPrint(pool, free_node) != 0 {
-//                     (*mem_exc_info).errorAddr = ((*tmp_node as *const u8).offset(OS_MEM_NODE_HEAD_SIZE as isize)) as usize;
-//                     (*mem_exc_info).errorLen = OS_MEM_NODE_GET_SIZE((*tmp_node).sizeAndFlag) - OS_MEM_NODE_HEAD_SIZE;
-//                     (*mem_exc_info).errorOwner = task_id;
-//                     MEM_UNLOCK(pool, int_save);
-//                     return;
-//                 }
-//             }
-//             tmp_node = OS_MEM_NEXT_NODE(tmp_node);
-//         }
-        
-//         MEM_UNLOCK(pool, int_save);
-//         return;
-//     }
+#[cfg(feature = "LOSCFG_PLATFORM_EXC")]
+pub fn OsMemExcInfoGet(memNumMax: u32, memExcInfo: &MemInfoCB){
+    let mut buffer: &mut u8 = memExcInfo as &mut u8;
+    let mut count: u32 = 0;
+#[cfg(feature = "LOSCFG_MEM_MUL_POOL")]
+{
+    let mut memPool: &OsMemPoolHead = g_poolHead;
+    while !memPool.is_null() {
+        OsMemExcInfoGetSub(memPool, buffer as &mut MemInfoCB);
+        count += 1;
+        buffer += std::mem::size_of::<MemInfoCB>;
+        if count >= memNumMax {
+            break;
+        }
+        memPool = (*memPool).nextPool;
+    }
+}
+#[cfg(not(feature = "LOSCFG_MEM_MUL_POOL"))]
+{
+    OsMemExcInfoGetSub(m_aucSysMem0, buffer);
+    count += 1;
+}
+    return count;
+}
 
-//     pub fn OsMemExcInfoGet(memNumMax: u32, memExcInfo: &MemInfoCB){
-//         let mut buffer: &mut u8 = memExcInfo as &mut u8;
-//         let mut count: u32 = 0;
-//     #[cfg(LOSCFG_MEM_MUL_POOL = 1)]
-//     {
-//         let mut memPool: &OsMemPoolHead = g_poolHead;
-//         while !memPool.is_null() {
-//             OsMemExcInfoGetSub(memPool, buffer as &mut MemInfoCB);
-//             count ++;
-//             buffer += std::mem:size_of::<MemInfoCB>;
-//             if count >= memNumMax {
-//                 break;
-//             }
-//             memPool = (*memPool).nextPool;
-//         }
-//     }
-//     #[cfg(not(LOSCFG_MEM_MUL_POOL = 1))]
-//     {
-//         OsMemExcInfoGetSub(m_aucSysMem0, buffer);
-//         count++;
-//     }
-//         return count;
-//     }
-// }
