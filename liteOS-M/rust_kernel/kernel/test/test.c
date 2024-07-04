@@ -42,7 +42,7 @@ void Init_Pool(){
 }
 
 void Alloc_Test(void* pool){
-    printf("现在申请5个分别为为22,44的内存块:\n");
+    printf("现在申请2个分别为为22,44的内存块:\n");
     //注意,返回的地址是实际可用内存的地址,去掉了头部的信息域
     void* Alloc_Block_1 = LOS_MemAlloc(pool,22);
     void* Alloc_Block_2 = LOS_MemAlloc(pool,44);
