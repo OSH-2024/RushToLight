@@ -506,7 +506,7 @@ pub fn OsAllMemNodeDoHandle(pool: Option<&mut c_void>, handle: HandleFn, arg: Op
         let mut endNode: *mut OsMemNodeHead = null_mut();
         let mut intSave: u32 = 0;
         
-        if LOS_MemIntegrityCheck(Some(pool)) != 0 {       
+        if LOS_MemIntegrityCheck(pool as *mut c_void) != 0 {       
             println!("LOS_MemIntegrityCheck error");
             return;
         }
@@ -934,16 +934,14 @@ fn LOS_MemExpandEnable(pool: Option<&mut c_void>) {
     }
     
     fn LOS_MemUsedNodeShow(pool: *mut OsMemPoolHead){
-        if let Some(pool) = pool {
-            let count: u32 = 0;
-            println!("\n\rnode          size    ");
-            for count in 0..LOSCFG_MEM_RECORD_LR_CNT{
-                println!("    LR{}   ", count);
-            }
-            OsMemLeakCheckInit();
-            unsafe{OsAllMemNodeDoHandle(Some(&mut *(pool as *mut OsMemPoolHead as *mut c_void)), OsMemUsedNodePrintHandle, None)};
-            return;
+        let count: u32 = 0;
+        println!("\n\rnode          size    ");
+        for count in 0..LOSCFG_MEM_RECORD_LR_CNT{
+            println!("    LR{}   ", count);
         }
+        OsMemLeakCheckInit();
+        unsafe{OsAllMemNodeDoHandle(Some(&mut *(pool as *mut OsMemPoolHead as *mut c_void)), OsMemUsedNodePrintHandle, None)};
+        return;
     }
     
     #[cfg(feature = "LOSCFG_KERNEL_PRINTF")]
@@ -1239,13 +1237,6 @@ fn OsMemPoolInit(pool: Option<&mut c_void>, size: u32) -> u32{//pool是指针，
         unsafe{(*poolHead).info.curUsedSize = (std::mem::size_of::<OsMemPoolHead>() + OS_MEM_NODE_HEAD_SIZE) as u32};
         unsafe{(*poolHead).info.waterLine = (*poolHead).info.curUsedSize};
     }
-
-    // #[cfg(feature = "LOSCFG_KERNEL_LMS")]
-    {
-        if resize != 0 {
-            OsLmsFirstNodeMark(pool, newNode);
-        }
-    }
         LOS_OK
     } else {
         LOS_NOK
@@ -1255,7 +1246,7 @@ fn OsMemPoolInit(pool: Option<&mut c_void>, size: u32) -> u32{//pool是指针，
 
 #[cfg(feature = "LOSCFG_MEM_MUL_POOL")]
 fn OsMemPoolDeInit(pool: Option<&mut c_void>, size: u32){
-    if let Some(pool) = pool {
+    
 }
 
 //向内存池链表中添加新的内存池
@@ -1266,12 +1257,12 @@ fn OsMemPoolAdd(pool: Option<&mut c_void>, size: u32) -> u32 {
         let mut curpool: *mut c_void = unsafe{g_poolHead};
         let mut poolEnd: usize = 0;
         while nextpool != null_mut(){
-            poolEnd= (nextpool as usize) + LOS_MemPoolSizeGet(Some(unsafe{&*nextpool})) as usize;
+            poolEnd= (nextpool as usize) + LOS_MemPoolSizeGet(nextpool) as usize;
             if ((pool as *const c_void <= nextpool as *const c_void) && (((pool as *mut c_void as usize) + size as usize) > (nextpool as usize))) ||
             (((pool as *mut c_void as usize) < poolEnd) && (((pool as *mut c_void as usize) + size as usize) >= poolEnd))
             {
                 println!("pool [0x{:x}, 0x{:x}) conflict with pool [0x{:x}, 0x{:x})", pool as *mut c_void as usize,
-                        (pool as *mut c_void as usize) + size as usize, (nextpool as usize), (nextpool as usize) + LOS_MemPoolSizeGet(Some(unsafe{&*nextpool})) as usize);
+                        (pool as *mut c_void as usize) + size as usize, (nextpool as usize), (nextpool as usize) + LOS_MemPoolSizeGet(nextpool) as usize);
                 return LOS_NOK;
             }
             curpool = nextpool;
@@ -1358,8 +1349,8 @@ pub fn LOS_MemInit(pool: *mut c_void, size: u32) -> u32 { //edit1
 
 
 #[cfg(feature = "LOSCFG_MEM_MUL_POOL")]
-fn LOS_MemDeInit(pool: &mut c_void) -> u32 {
-    if if pool.is_null(){
+fn LOS_MemDeInit(pool: *mut c_void) -> u32 {
+    if pool.is_null(){
         LOS_NOK
     }
     else {
@@ -1460,7 +1451,7 @@ fn OsMemAlloc(pool: Option<&mut OsMemPoolHead>, size: u32, mut int_save: u32) ->
 #[inline]
 fn LOS_MemAlloc(pool: *mut c_void, size: u32) -> *mut c_void { //改成c_void的参数和返回值 edit1
     if pool.is_null() { 
-        null_mut();
+        null_mut()
     }
     else {
         if size == 0 {
@@ -1494,13 +1485,13 @@ fn LOS_MemAlloc(pool: *mut c_void, size: u32) -> *mut c_void { //改成c_void的
 
 fn LOS_MemAllocAlign(pool: *mut c_void, size: u32, boundary: u32) -> *mut c_void { //改动参数,返回值 edit1
     if pool.is_null() {
-        null_mut();
+        null_mut()
     }
     else {
         let mut gap_size: u32 = 0;
         if size == 0 || boundary == 0 || !OS_MEM_IS_POW_TWO(boundary) ||
             !OS_MEM_IS_ALIGNED(boundary, std::mem::size_of::<*mut c_void>()) {
-            return None;
+            return null_mut();
         }
 
         let mut adjusted_size = size;
@@ -1509,12 +1500,12 @@ fn LOS_MemAllocAlign(pool: *mut c_void, size: u32, boundary: u32) -> *mut c_void
         }
 
         if boundary.checked_sub(std::mem::size_of::<u32>() as u32).unwrap_or(0) > u32::MAX - adjusted_size {
-            return None;
+            return null_mut();
         }
 
         let use_size = (adjusted_size + boundary) - std::mem::size_of::<u32>() as u32;
         if OS_MEM_NODE_GET_USED_FLAG(use_size) != 0 || OS_MEM_NODE_GET_ALIGNED_FLAG(use_size) != 0{
-            return None;
+            return null_mut();
         }
 
         let pool_head = pool as  *mut OsMemPoolHead;
@@ -1747,7 +1738,7 @@ fn OsGetRealPtr<'a>(pool: Option<&'a c_void>, ptr: Option<&'a mut c_void>) -> Op
 }
 
 pub fn LOS_MemFree(pool: *mut c_void, ptr: *mut c_void) -> u32 {  //edit1
-    if (pool.is_null() || ptr.is_null()){
+    if pool.is_null() || ptr.is_null(){
         LOS_NOK
     }
     else {
@@ -1764,7 +1755,7 @@ pub fn LOS_MemFree(pool: *mut c_void, ptr: *mut c_void) -> u32 {  //edit1
 
         MEM_LOCK(Some(unsafe{&mut*pool_head}), &mut int_save);
         loop {
-            let real_ptr = OsGetRealPtr(Some(&*pool), Some(&*ptr)).unwrap() as *mut c_void; //将ptr转换成引用|edit1
+            let real_ptr = OsGetRealPtr(Some(unsafe{&*pool}), Some(unsafe{&mut*ptr})).unwrap() as *mut c_void; //将ptr转换成引用|edit1
             if real_ptr.is_null() {
                 break;
             }
@@ -1861,7 +1852,7 @@ fn OsMemRealloc<'a>(pool: Option<&'a mut OsMemPoolHead>, ptr: Option<&'a c_void>
         if !tmp_ptr.is_null() {
             if unsafe{memcpy_s(tmp_ptr, size as usize, ptr, (node_size - OS_MEM_NODE_HEAD_SIZE as u32) as usize) != EOK }{
                 MEM_UNLOCK(Some(pool), &mut int_save);
-                unsafe{LOS_MemFree(Some(&mut*(pool as *mut OsMemPoolHead as *mut c_void)), Some(&mut*tmp_ptr))};
+                LOS_MemFree(pool as *mut OsMemPoolHead as *mut c_void, tmp_ptr);
                 MEM_LOCK(Some(pool), &mut int_save);
                 return None;
             }
@@ -1962,7 +1953,7 @@ pub fn LOS_MemFreeByTaskID(pool: *mut c_void, task_id: u32) -> u32 {
 
 pub fn LOS_MemPoolSizeGet(pool: *mut c_void) -> u32{ //edit1
     if pool.is_null() {
-        LOS_NOK;
+        LOS_NOK
     }
     else {
         let mut count: u32 = 0;
@@ -1983,6 +1974,7 @@ pub fn LOS_MemPoolSizeGet(pool: *mut c_void) -> u32{ //edit1
         }       
     }
         count
+}
 }
 
 fn MemUsedGetHandle(curNode: Option<&mut OsMemNodeHead>, arg: Option<&mut c_void>){
@@ -2423,7 +2415,7 @@ fn OsMemAllocCheck(pool: Option<&mut OsMemPoolHead>, mut int_save: u32) -> u32 {
 fn LOS_MemIntegrityCheck(pool: *mut c_void) -> u32 {
     // 检查输入指针是否为空
     if pool.is_null() {
-        LOS_NOK;
+        LOS_NOK
     }
     else {
         let pool_head = unsafe{&mut *(pool as *mut OsMemPoolHead)};
@@ -2503,7 +2495,7 @@ pub fn LOS_MemInfoGet(pool: *mut c_void, pool_status: *mut LOS_MEM_POOL_STATUS) 
         }
 
         let _ = memset_s(pool_status as *mut c_void, std::mem::size_of::<LOS_MEM_POOL_STATUS>(), 0, std::mem::size_of::<LOS_MEM_POOL_STATUS>());
-        unsafe{OsAllMemNodeDoHandle(Some(unsafe{&mut*pool}), OsMemNodeInfoGetHandle, Some(&mut*(pool_status as *mut c_void)))};
+        unsafe{OsAllMemNodeDoHandle(Some(&mut*pool), OsMemNodeInfoGetHandle, Some(&mut*(pool_status as *mut c_void)))};
 
         MEM_LOCK(Some(unsafe{&mut*pool_info}), &mut int_save);
         #[cfg(feature = "LOSCFG_MEM_WATERLINE")]{
@@ -2523,7 +2515,7 @@ fn OsMemInfoPrint(pool: Option<&mut c_void>) {
             let pool_info = pool as *mut c_void as *mut OsMemPoolHead;
             let status: *mut LOS_MEM_POOL_STATUS = null_mut();   // 源码LOS_MEM_POOL_STATUS status = {0};感觉写错了，应该是指针
 
-            if LOS_MemInfoGet(Some(&mut*pool), Some(unsafe{&mut*(status)})) == LOS_NOK {
+            if LOS_MemInfoGet(pool, status) == LOS_NOK {
                 return;
             }
 
@@ -2532,7 +2524,7 @@ fn OsMemInfoPrint(pool: Option<&mut c_void>) {
                 println!("pool addr          pool size    used size     free size    max free node size   used node num     free node num      UsageWaterLine");
                 println!("---------------    --------     -------       --------     --------------       -------------      ------------      ------------");
                 unsafe{println!("{:-16p}   0x{:08x}   0x{:08x}    0x{:08x}   0x{:016x}   0x{:013x}    0x{:013x}    0x{:013x}",
-                        (*pool_info).info.pool, LOS_MemPoolSizeGet(Some(pool)), (*status).totalUsedSize,
+                        (*pool_info).info.pool, LOS_MemPoolSizeGet(pool), (*status).totalUsedSize,
                         (*status).totalFreeSize, (*status).maxFreeNodeSize, (*status).usedNodeNum,
                         (*status).freeNodeNum, (*status).usageWaterLine)};
             }
@@ -2550,9 +2542,9 @@ fn OsMemInfoPrint(pool: Option<&mut c_void>) {
     
 }
 
-fn LOS_MemFreeNodeShow(pool: *mut c_void>) -> u32 { //edit1
+fn LOS_MemFreeNodeShow(pool: *mut c_void) -> u32 { //edit1
     if pool.is_null() {
-        LOS_NOK;
+        LOS_NOK
     }
     else{
     #[cfg(feature = "LOSCFG_KERNEL_PRINTF")]

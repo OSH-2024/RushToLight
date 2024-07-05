@@ -30,7 +30,7 @@
  */
 
 #include "los_memory.h"
-#include "securec.h"
+// #include "securec.h" 缺
 #include "los_arch.h"
 #include "los_config.h"
 #include "los_debug.h"
@@ -1255,9 +1255,9 @@ STATIC INLINE BOOL OsMemAddrValidCheck(const struct OsMemPoolHead *pool, const V
     UINT32 size;
 
     size = pool->info.totalSize;
-    if (OS_MEM_MIDDLE_ADDR_OPEN_END(pool + 1, addr, (UINTPTR)pool + size)) {
-        return TRUE;
-    }
+        if (OS_MEM_MIDDLE_ADDR_OPEN_END(pool + 1, addr, (UINTPTR)pool + size)) {
+            return TRUE;
+        } 
 #if OS_MEM_EXPAND_ENABLE
     struct OsMemNodeHead *node = NULL;
     struct OsMemNodeHead *sentinel = OS_MEM_END_NODE(pool, size);
