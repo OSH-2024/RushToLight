@@ -121,16 +121,22 @@ fn los_mem_pool_list() -> UINT32 {
 }
 
 fn os_mem_alloc(pool: *mut OsMemPoolHead, size: UINT32, int_save: UINT32) -> *mut c_void {
+    // 计算对齐后的分配大小
     let alloc_size = os_mem_align(size + OS_MEM_NODE_HEAD_SIZE, OS_MEM_ALIGN_SIZE);
     #![allow(unused_variables)]
     let alloc_node: *mut OsMemNodeHead = null_mut();
+
+    // 内存节点完整性检查
     #[cfg(LOSCFG_BASE_MEM_NODE_INTEGRITY_CHECK)]
     if os_mem_alloc_check(pool, int_save) == LOS_NOK {
         return null_mut();
     }
+
     loop {
+        // 尝试获取空闲内存节点
         let alloc_node = os_mem_free_node_get(pool, alloc_size);
         if alloc_node.is_null() {
+            // 内存池扩展功能
             #[cfg(OS_MEM_EXPAND_ENABLE)]
             {
                 if (*pool).info.attr & OS_MEM_POOL_EXPAND_ENABLE != 0 {
@@ -140,6 +146,8 @@ fn os_mem_alloc(pool: *mut OsMemPoolHead, size: UINT32, int_save: UINT32) -> *mu
                     }
                 }
             }
+
+            // 低内存杀手功能
             #[cfg(LOSCFG_KERNEL_LMK)]
             {
                 let kill_ret = los_lmk_tasks_kill();
@@ -147,7 +155,8 @@ fn os_mem_alloc(pool: *mut OsMemPoolHead, size: UINT32, int_save: UINT32) -> *mu
                     continue;
                 }
             }
-            // Print error message and return NULL
+
+            // 打印错误信息并返回空指针
             println!("---------------------------------------------------\
                       --------------------------------------------------------");
             mem_unlock(pool, int_save);
@@ -161,16 +170,20 @@ fn os_mem_alloc(pool: *mut OsMemPoolHead, size: UINT32, int_save: UINT32) -> *mu
         }  
     }
     
+    // 如果分配的节点大小足够，进行分割
     if alloc_size + OS_MEM_MIN_LEFT_SIZE <= (*alloc_node).size_and_flag {
         os_mem_split_node(pool, alloc_node, alloc_size);
     }
 
+    // 设置节点为已使用状态
     OS_MEM_NODE_SET_USED_FLAG(&mut (*alloc_node).size_and_flag);
     os_mem_water_used_record(pool, OS_MEM_NODE_GET_SIZE((*alloc_node).size_and_flag));
 
+    // 内存泄漏检查
     #[cfg(LOSCFG_MEM_LEAKCHECK)]
     os_mem_link_register_record(alloc_node);
 
+    // 返回可用的内存节点
     return os_mem_create_used_node(alloc_node as *mut c_void);
 }
 
