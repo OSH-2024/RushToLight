@@ -34,6 +34,7 @@ use crate::include::los_config_h::LOS_OK;
 use crate::include::los_config_h::MAX_SHRINK_PAGECACHE_TRY;
 use crate::include::los_config_h::PAGE_SHIFT;
 use crate::include::los_compiler_h::LOS_NOK;
+use crate::include::los_task_h::LOS_Panic;
 use crate::include::los_memory_h::OsMemNodeHead__bindgen_ty_1;
 use crate::include::los_memory_h::OS_MEM_FREE_LIST_COUNT;
 use crate::include::los_memory_h::LOS_MEM_POOL_STATUS;
@@ -183,7 +184,7 @@ fn MEM_LOCK(pool: Option<&mut OsMemPoolHead>, state: &mut u32) {
     if let Some(pool) = pool
     {
         if (*pool).info.attr & OS_MEM_POOL_UNLOCK_ENABLE == 0 {
-            // unsafe{ *state = LOS_IntLock(); }/*los_interrupt.h里 */
+            unsafe{ *state = LOS_IntLock(); }/*los_interrupt.h里 */
         }
     }
 }
@@ -192,7 +193,7 @@ fn MEM_UNLOCK(pool: Option<&mut OsMemPoolHead>, state: &mut u32) {
     if let Some(pool) = pool
     {
         if (*pool).info.attr & OS_MEM_POOL_UNLOCK_ENABLE == 0 {
-            // unsafe{ LOS_IntRestore(*state) };/*los_interrupt.h里 */
+            unsafe{ LOS_IntRestore(*state) };/*los_interrupt.h里 */
         }
     }
     
@@ -495,11 +496,11 @@ fn OsMemNodeSetTaskID(node: Option<&mut OsMemUsedNodeHead>) {
     }
 }
 
-type HandleFn = fn(cur_node: Option<&mut OsMemNodeHead>, arg: *mut c_void); //函数指针类型
+type HandleFn = fn(cur_node: Option<&mut OsMemNodeHead>, arg: Option<&mut c_void>); //函数指针类型
 
 #[inline]
-pub fn OsAllMemNodeDoHandle(pool: Option<&mut c_void>, handle: HandleFn, arg: *mut c_void){ 
-    if let Some(pool) = pool {
+pub fn OsAllMemNodeDoHandle(pool: Option<&mut c_void>, handle: HandleFn, arg: Option<&mut c_void>){ 
+    if let (Some(pool), Some(arg)) = (pool, arg) {
         let poolInfo = pool as *mut c_void as *mut OsMemPoolHead;
         let mut tmpNode: *mut OsMemNodeHead = null_mut();
         let mut endNode: *mut OsMemNodeHead = null_mut();
@@ -525,46 +526,15 @@ pub fn OsAllMemNodeDoHandle(pool: Option<&mut c_void>, handle: HandleFn, arg: *m
 }
                 break;
             }
-            unsafe{handle(Some(&mut *tmpNode), arg)};
+            unsafe{handle(Some(&mut *tmpNode), Some(arg))};
             unsafe{tmpNode = *OS_MEM_NEXT_NODE(Some(&mut *tmpNode)).as_mut().unwrap() as *mut OsMemNodeHead};
         }
         unsafe{MEM_UNLOCK(Some(&mut *poolInfo), &mut intSave)};
     } else {
-        if let Some(pool)= pool {
-            let poolInfo = pool as *mut c_void as *mut OsMemPoolHead;
-            let mut tmpNode: *mut OsMemNodeHead = null_mut();
-            let mut endNode: *mut OsMemNodeHead = null_mut();
-            let mut intSave: u32 = 0;
-            
-            if LOS_MemIntegrityCheck(pool as *mut c_void) != 0 {       
-                println!("LOS_MemIntegrityCheck error");
-                return;
-            }
-            unsafe{MEM_LOCK(Some(&mut *poolInfo), &mut intSave)};
-            unsafe{endNode = *OS_MEM_END_NODE(Some(pool), (*poolInfo).info.totalSize as usize).as_mut().unwrap() as *mut OsMemNodeHead};
-            tmpNode = *OS_MEM_FIRST_NODE(Some(pool)).as_mut().unwrap() as *mut OsMemNodeHead;
-            while tmpNode <= endNode {
-                if tmpNode == endNode {
-    #[cfg(feature = "OS_MEM_EXPAND_ENABLE")]
-    {   
-                    if OsMemIsLastSentinelNode(Some(unsafe{&*endNode})) == false { 
-                        let size: u32 = OS_MEM_NODE_GET_SIZE(unsafe{(*endNode).sizeAndFlag});
-                        tmpNode = OsMemSentinelNodeGet(Some(unsafe{&*endNode})).unwrap() as *mut c_void as *mut OsMemNodeHead;    
-                        endNode = OS_MEM_END_NODE(Some(unsafe{&*(tmpNode as *const c_void)}), size as usize).unwrap() as *mut OsMemNodeHead;
-                        continue;
-                    }
+        println!("input param is NULL"); 
+        return;
     }
-                    break;
-                }
-                unsafe{handle(Some(&mut *tmpNode), null_mut())};
-                unsafe{tmpNode = *OS_MEM_NEXT_NODE(Some(&mut *tmpNode)).as_mut().unwrap() as *mut OsMemNodeHead};
-            }
-            unsafe{MEM_UNLOCK(Some(&mut *poolInfo), &mut intSave)};
-        } else {
-            println!("input param is NULL"); 
-            return;
-        }
-    }
+    
 }
 
 #[cfg(feature = "LOSCFG_TASK_MEM_USED")]
@@ -612,7 +582,7 @@ macro_rules! function_name {
     () => {{
         fn f() {}
         let name = std::any::type_name::<fn()>();
-        name
+        &name[6..name.len() - 4]
     }};
 }   //TOBECHECK
 
@@ -642,11 +612,9 @@ fn OsMemLastSentinelNodeGet(sentinelNode: Option<&OsMemNodeHead>) -> Option<&mut
 fn OsMemSentinelNodeCheck(sentinelNode: Option<&OsMemNodeHead>) -> bool {
     if let Some(sentinelNode) = sentinelNode{
         if OS_MEM_NODE_GET_USED_FLAG((*sentinelNode).sizeAndFlag) == 0 {
-            println!("645");
             return false;
         }
-        if !OS_MEM_MAGIC_VALID(Some(sentinelNode)){  
-            println!("649");  
+        if !OS_MEM_MAGIC_VALID(Some(sentinelNode)){    
             return false;
         }
         true
@@ -698,8 +666,7 @@ fn OsMemSentinelNodeSet(sentinelNode: Option<&mut OsMemNodeHead>, new_node: Opti
 #[inline]
 fn OsMemSentinelNodeGet(node: Option<&OsMemNodeHead>) -> Option<&mut c_void> {
     if let Some(node) = node {
-        if !OsMemSentinelNodeCheck(Some(node)) {
-            println!("700");
+            if !OsMemSentinelNodeCheck(Some(node)) {
             return None;
         }
         unsafe{Some(&mut *((*node).ptr.next as *mut OsMemNodeHead as *mut c_void))}
@@ -722,10 +689,7 @@ fn PreSentinelNodeGet<'a>(pool: Option<&'a c_void>, node: Option<&'a OsMemNodeHe
                 println!("PreSentinelNodeGet can not find node 0x{:x}", node as *const OsMemNodeHead as usize);
                 return None;
             }
-            next_node = match unsafe { OsMemSentinelNodeGet(Some(&*sentinel_node)) } {
-                Some(node_ptr) => node_ptr as *mut c_void as *mut OsMemNodeHead,
-                None => null_mut(),
-            };
+            next_node = unsafe{OsMemSentinelNodeGet(Some(&*sentinel_node)).unwrap() as *mut c_void as *mut OsMemNodeHead};
             if next_node == node as *const OsMemNodeHead as *mut OsMemNodeHead{
                 return Some(unsafe{&mut *sentinel_node});
             }
@@ -938,7 +902,7 @@ fn LOS_MemExpandEnable(pool: Option<&mut c_void>) {
                 0,
                 mem::size_of_val(&node.linkReg),
             );}
-            // unsafe{OsBackTraceHookCall(node.linkReg.as_mut_ptr() as *mut u32, LOSCFG_MEM_RECORD_LR_CNT, LOSCFG_MEM_OMIT_LR_CNT, 0)};
+            unsafe{OsBackTraceHookCall(node.linkReg.as_mut_ptr() as *mut u32, LOSCFG_MEM_RECORD_LR_CNT, LOSCFG_MEM_OMIT_LR_CNT, 0)};
         } //c_void OsBackTraceHookCall(UINTPTR *LR, UINT32 LRSize, UINT32 jumpCount, UINTPTR SP)
     }
     #[inline]
@@ -961,8 +925,8 @@ fn LOS_MemExpandEnable(pool: Option<&mut c_void>) {
     }
 
     #[inline]
-    fn OsMemUsedNodePrintHandle(node: Option<&mut OsMemNodeHead>, arg: *mut c_void){
-        if let Some(node) = node {
+    fn OsMemUsedNodePrintHandle(node: Option<&mut OsMemNodeHead>, arg: Option<&mut c_void>){
+        if let (Some(node), Some(arg)) = (node, arg) {
             UNUSED!(arg);
             OsMemUsedNodePrint(node);
             return;
@@ -977,7 +941,7 @@ fn LOS_MemExpandEnable(pool: Option<&mut c_void>) {
             println!("    LR{}   ", count);
         }
         OsMemLeakCheckInit();
-        unsafe{OsAllMemNodeDoHandle(Some(&mut *(pool as *mut OsMemPoolHead as *mut c_void)), OsMemUsedNodePrintHandle, null_mut())};
+        unsafe{OsAllMemNodeDoHandle(Some(&mut *(pool as *mut OsMemPoolHead as *mut c_void)), OsMemUsedNodePrintHandle, None)};
         return;
     }
     
@@ -1146,7 +1110,9 @@ fn OsMemFreeNodeAdd(pool: Option<&mut c_void>, node: Option<&mut OsMemFreeNodeHe
     if let (Some(pool), Some(node)) = (pool, node) {
         let index: u32 = OsMemFreeListIndexGet((*node).header.sizeAndFlag);
         if index >= OS_MEM_FREE_LIST_COUNT/* 在los_memory_h.rs里定义 */ {
-            println!("The index of free lists is error, index = {:}\n", index);
+            let message = format!("The index of free lists is error, index = {:}\n", index);
+            let message_ptr = message.as_ptr() as *const i8;
+            unsafe{LOS_Panic(message_ptr);}
         }
         OsMemListAdd(Some(unsafe{&mut *(pool as *mut c_void as *mut OsMemPoolHead)}), index, Some(node));
     }
@@ -1355,12 +1321,10 @@ pub fn OsHookCall(hook_type: u32, pool: Option<&OsMemPoolHead>, size: u32){}
 #[no_mangle]
 pub extern "C" fn LOS_MemInit(pool: *mut c_void, size: u32) -> u32 { //edit1
     if pool.is_null(){
-        println!("pool is null");
         LOS_NOK
     }
     else {
         if size <= OS_MEM_MIN_POOL_SIZE as u32 {
-            println!("1326: size = {}, OS_MEM_MIN_POOL_SIZE = {}", size, OS_MEM_MIN_POOL_SIZE);
             return LOS_NOK;
         }
 
@@ -1370,7 +1334,6 @@ pub extern "C" fn LOS_MemInit(pool: *mut c_void, size: u32) -> u32 { //edit1
         }
 
         if OsMemPoolInit(Some(unsafe{&mut*pool}), size) != 0 {
-            println!("1336");
             return LOS_NOK;
         }
 
@@ -1378,7 +1341,6 @@ pub extern "C" fn LOS_MemInit(pool: *mut c_void, size: u32) -> u32 { //edit1
     {
         if OsMemPoolAdd(Some(unsafe{&mut*pool}), size) != 0 {
             OsMemPoolDeInit(Some(unsafe{&mut*pool}), size);
-            println!("1344");
             return LOS_NOK;
         }
     }
@@ -2019,9 +1981,9 @@ pub fn LOS_MemPoolSizeGet(pool: *mut c_void) -> u32{ //edit1
 }
 }
 
-fn MemUsedGetHandle(curNode: Option<&mut OsMemNodeHead>, arg: *mut c_void){
-    if let Some(curNode) = curNode {
-        let memUsed: *mut u32 = arg as *mut u32;
+fn MemUsedGetHandle(curNode: Option<&mut OsMemNodeHead>, arg: Option<&mut c_void>){
+    if let (Some(curNode), Some(arg)) = (curNode, arg) {
+        let memUsed: *mut u32 = arg as *mut c_void as *mut u32;
         unsafe{
         if OS_MEM_IS_GAP_NODE(Some(curNode)) {
             *memUsed += OS_MEM_NODE_HEAD_SIZE as u32;
@@ -2038,7 +2000,7 @@ pub fn LOS_MemTotalUsedGet(pool: *mut c_void) -> u32{
     }
    else {
         let memUsed: u32 = 0;
-        OsAllMemNodeDoHandle(Some(unsafe{&mut*pool}), MemUsedGetHandle, memUsed as *mut c_void);
+        OsAllMemNodeDoHandle(Some(unsafe{&mut*pool}), MemUsedGetHandle, Some(unsafe{&mut*(memUsed as *mut c_void)}));
         memUsed
     }
 }
@@ -2156,17 +2118,10 @@ fn OsMemPoolHeadCheck(pool: Option<&OsMemPoolHead>){
             let mut size: u32 = 0;
             let mut node: *mut OsMemNodeHead = null_mut();
             let mut sentinel: *mut OsMemNodeHead = OS_MEM_END_NODE(Some(unsafe{&*(pool as *const OsMemPoolHead as *const c_void)}), (*pool).info.totalSize as usize).unwrap() as *mut OsMemNodeHead;
-            println!("2153:is_null = {}", sentinel.is_null());
             while !OsMemIsLastSentinelNode(Some(unsafe{&*sentinel})) {
                 size = OS_MEM_NODE_GET_SIZE(unsafe{(*sentinel).sizeAndFlag});
-                node = match unsafe { OsMemSentinelNodeGet(Some(&*sentinel)) } {
-                    Some(node_ptr) => node_ptr as *mut c_void as *mut OsMemNodeHead,
-                    None => null_mut(),
-                };
-                sentinel = match unsafe { OS_MEM_END_NODE(Some(&*(node as *const c_void)), size as usize) } {
-                    Some(node_ptr) => node_ptr as *mut OsMemNodeHead,
-                    None => null_mut(),
-                };
+                node = OsMemSentinelNodeGet(Some(unsafe{&*sentinel})).unwrap() as *mut c_void as *mut OsMemNodeHead;
+                unsafe{sentinel = OS_MEM_END_NODE(Some(&*(node as *const c_void)), size as usize).unwrap() as *mut OsMemNodeHead};
                 println!("expand node info: nodeAddr: 0x{:x}, nodeSize: 0x{:x}\n", node as usize, size);
             }
     }
@@ -2427,13 +2382,15 @@ fn OsMemIntegrityCheckError(
             task_cb.taskName
         );
         
-        println!("Memory integrity check error!");
+        LOS_Panic("Memory integrity check error!\n");
     }
 
     #[cfg(not(any(feature = "LOSCFG_MEM_FREE_BY_TASKID", feature = "LOSCFG_TASK_MEM_USED")))]
     {
         MEM_UNLOCK(Some(pool), int_save);
-        println!("Memory integrity check error, cur node: 0x{:x}, pre node: 0x{:x}\n", tmp_node as *const OsMemNodeHead as usize, pre_node as *const OsMemNodeHead as usize);
+        let error_message = format!("Memory integrity check error, cur node: 0x{:x}, pre node: 0x{:x}\n", tmp_node as *const OsMemNodeHead as usize, pre_node as *const OsMemNodeHead as usize);
+        let error_message_ptr = error_message.as_ptr() as *const i8;
+        unsafe{LOS_Panic(error_message_ptr)};
     }
 
     }
@@ -2517,9 +2474,9 @@ fn OsMemInfoGet(node: Option<&mut OsMemNodeHead>, pool_status: Option<&mut LOS_M
     }
 }
 
-fn OsMemNodeInfoGetHandle(cur_node: Option<&mut OsMemNodeHead>, arg: *mut c_void) {
-    if let Some(cur_node) = cur_node {
-        let pool_status = arg as *mut LOS_MEM_POOL_STATUS;
+fn OsMemNodeInfoGetHandle(cur_node: Option<&mut OsMemNodeHead>, arg: Option<&mut c_void>) {
+    if let (Some(cur_node), Some(arg)) = (cur_node, arg) {
+        let pool_status = arg as *mut c_void as *mut LOS_MEM_POOL_STATUS;
         unsafe{OsMemInfoGet(Some(cur_node), Some(&mut*pool_status))};
     }
 }
@@ -2543,7 +2500,7 @@ pub extern "C" fn LOS_MemInfoGet(pool: *mut c_void, pool_status: *mut LOS_MEM_PO
         }
 
         let _ = memset_s(pool_status as *mut c_void, std::mem::size_of::<LOS_MEM_POOL_STATUS>(), 0, std::mem::size_of::<LOS_MEM_POOL_STATUS>());
-        unsafe{OsAllMemNodeDoHandle(Some(&mut*pool), OsMemNodeInfoGetHandle, pool_status as *mut c_void)};
+        unsafe{OsAllMemNodeDoHandle(Some(&mut*pool), OsMemNodeInfoGetHandle, Some(&mut*(pool_status as *mut c_void)))};
 
         MEM_LOCK(Some(unsafe{&mut*pool_info}), &mut int_save);
         #[cfg(feature = "LOSCFG_MEM_WATERLINE")]{
