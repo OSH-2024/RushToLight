@@ -2,7 +2,7 @@
 ![alt_text](./src/our_logo.jpg)
 
 ## 项目介绍
-OpenHarmony LiteOS-M内核是面向IoT领域构建的轻量级嵌入式物联网操作系统内核。我们打算用RUST改写Harmony LiteOS-M以提高其安全性。
+OpenHarmony LiteOS-M内核是面向IoT领域构建的轻量级嵌入式物联网操作系统内核。我们打算用Rust改写Harmony LiteOS-M以提高其安全性。
 
 **小组名称**：觉悟OS (RushToLight)
 
