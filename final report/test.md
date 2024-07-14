@@ -57,8 +57,11 @@ void Print_Pool_Info(void* pool){
 }
 ```
 运行后,得到如图信息:
-![pic](./test_output1.png)
-![pic](./test_output2.png)
+
+![pic](./img/test_output1.png)
+
+![pic](./img/test_output2.png)
+
 其结果符合预期,说明模块可以正常提供内存管理功能
 
 #### 安全性测试:
@@ -112,5 +115,5 @@ int main(){
 }
 ```
 运行可得
-![pic](./test_output3.png)
+![pic](./img/test_output3.png)
 符合预期,说明改写的memory模块对不安全行为能够进行检测

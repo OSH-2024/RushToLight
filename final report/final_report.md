@@ -21,14 +21,14 @@ bindgen工具的使用方法如下：
 它的命令格式为：`bindgen header.h -o bindings.rs -I /path/to/include`，其中`header.h`是改写代码原来需要引入的头文件，`bindings.rs`是其对应的绑定头文件，`-I`选项表示后面是此头文件依赖的其它头文件的寻找路径，这个选项很好地解决了头文件嵌套引入其它头文件的问题，我们只需要将顶层头文件及其依赖的所有子头文件放在同一目录下，后面`-I`选项便可以直接舍去。
 bindgen工具做了以下工作：
 - 类型映射：将C语言的基本类型(如int、char)与复杂类型(如struct、union)映射到Rust的对应类型；
-  ![alt text](image.png)
+  ![alt text](./img/image.png)
 - 函数映射：C 函数声明映射为 Rust 函数声明，包括参数和返回类型；
-  ![alt text](image-1.png)
+  ![alt text](./img/image-1.png)
 - 常量映射：C 中的 `#define` 宏定义通常映射为 Rust 中的 `const` 常量或者 `static` 变量；
-  ![alt text](image-2.png)
+  ![alt text](./img/image-2.png)
 
 在这些绑定库生成完成后，可以直接在顶层代码文件调用库的内容。
-![alt text](image-3.png)
+![alt text](./img/image-3.png)
 
 ### 问题二：C语言中的条件编译
 los_memory.c里包含大量的类似的条件编译代码：
@@ -66,9 +66,9 @@ los_memory.c里包含大量的类似的条件编译代码：
 Rust 中的 cfg 属性允许根据编译器的配置和条件来选择性地编译代码块。Cargo 的特性（features）允许在构建时根据用户的选择来编译不同的代码路径。`Cargo.toml`文件中可以定义特性，并在代码中使用这些特性来管理条件编译。
 
 我们可以在`Cargo.toml`文件下加入我们需要调控的属性，然后在default中选择我们要开启的属性，并将其加入，便可以实现feature的设置。
-![alt text](image-4.png)
+![alt text](./img/image-4.png)
 在rs代码内部，使用`#[cfg(feature = "xxx")]`以及结合各种逻辑语句如`not()`、`any()`、`all()`等，便可实现各种逻辑的条件编译了。
-![alt text](image-5.png)
+![alt text](./img/image-5.png)
 
 ### 问题三：C源代码中的裸指针缺乏安全机制
 原来的`los_memory.c`文件中包含了大量不安全的操作，如对一个指针进行类型转换再访问其成员变量而不在使用前对其进行检查，可能会导致非法的访问。除此之外有一些对于指针的操作用宏进行表示，缺乏类型检查，虽然C语言能够进行数据类型的隐式转换，但是转换过程中可能存在安全隐患(缓冲区溢出)。基于这些安全问题，我们小组也进行了修改方案的讨论。
@@ -106,12 +106,12 @@ rust代码文件显然也是不能直接被C文件识别的，并且梁总语言
 Rust和C的数据类型也可能不完全兼容，导致内存对齐和大小问题。
 #### 解决方案：利用C和Rust之间的ABI接口
 对于要编译成C可以识别的代码的函数，需要在前面添加`#[no_mangle]`属性，告诉编译器不修改其函数名，便于C调用Rust编写的函数时能够匹配上。
-![alt text](image-6.png)
+![alt text](./img/image-6.png)
 为了解决Rust和C之间数据结构不完全兼容的问题，对于复杂的数据类型，需要使用`#[repr(C)]`属性来指定与C兼容的内存布局。
-![alt text](image-7.png)
+![alt text](./img/image-7.png)
 除了以上的步骤，还需要将Rust代码编译成静态库，通过gcc工具将C语言编写的测试代码和静态库一起编译，才能够实现C调用Rust。因此需要进行以下步骤：
 - 使用`cargo build --release`命令对rust代码进行编译，并且编译类型为静态库；
-![alt text](image-8.png)
+![alt text](./img/image-8.png)
 编译后获得的静态库会位于当前目录下的target/release文件夹下。
 ```
 静态库所在路径示意图
@@ -170,6 +170,6 @@ language = "C"
 ```
 gcc -o (可执行文件名字) (测试文件名字).c -I. -Ltarget/release -l(Cargoo文件中定义的lib名字) -ldl -lpthread -Wl,-gc-section
 ```
-![alt text](image-9.png)
+![alt text](./img/image-9.png)
 
 至此，Rust改写过程中遇到的绝大部分问题已解决。
