@@ -646,7 +646,6 @@ void Print_Pool_Info(void* pool){
     return;
 }
 ```
-
 运行后,得到如图信息:
 
 ![pic](./img/test_output1.png)
@@ -707,7 +706,6 @@ int main(){
     }
 }
 ```
-
 运行可得
 
 ![pic](./img/test_output3.png)
